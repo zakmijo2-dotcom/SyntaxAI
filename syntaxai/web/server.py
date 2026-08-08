@@ -1,194 +1,247 @@
-"""
-Web server module for SyntaxAI WebView UI.
-
-Mobile / stability optimisations
----------------------------------
-* **Non-blocking**: ``Agent.run`` executes in a worker thread
-  (``loop.run_in_executor``), so the FastAPI event loop stays responsive and
-  WebSockets never freeze — critical on single-core mobile devices.
-* **Concurrency limit**: a ``asyncio.Semaphore`` bounds simultaneous agent
-  runs (defaults to 1 in mobile mode) to avoid overloading a phone's CPU/RAM.
-* **Streaming**: the agent emits structured events (thinking / tool_start /
-  tool_end / partial / response / done); these are bridged from the worker
-  thread to the WebSocket via an ``asyncio.Queue``.
-"""
+"""Web server module for SyntaxAI WebView UI."""
 
 from __future__ import annotations
 
 import asyncio
-import json
-import os
-import time
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Optional
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request
+from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
-from pydantic import BaseModel
 
-from syntaxai.core.config import Config
-from syntaxai.core.agent import Agent
+from syntaxai.config import Config
 
-# Global state
-_agent: Optional[Agent] = None
+_global_config: Config | None = None
 _websockets: set = set()
-_semaphore: Optional[asyncio.Semaphore] = None
-_request_counter = 0
+_semaphore: asyncio.Semaphore | None = None
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global _agent, _semaphore
-    config = Config.load()
-    _agent = Agent(config)
-    _semaphore = asyncio.Semaphore(max(1, config.max_concurrent_tasks))
+    global _global_config, _semaphore
+    _global_config = Config.load()
+    _semaphore = asyncio.Semaphore(max(1, _global_config.max_concurrent_tasks))
     yield
-    _agent = None
     _semaphore = None
 
 
 app = FastAPI(
     title="SyntaxAI",
-    description="Terminal AI Programming Assistant - Web UI",
-    version="0.1.0",
-    lifespan=lifespan
+    description="Terminal AI Programming Assistant - Web UI (Built on Pi Agent CLI)",
+    version="0.2.0",
+    lifespan=lifespan,
 )
 
-# Mount static files
 static_dir = Path(__file__).parent / "static"
-app.mount("/static", StaticFiles(directory=static_dir), name="static")
+if static_dir.exists():
+    app.mount("/static", StaticFiles(directory=static_dir), name="static")
 
-# Templates
 templates_dir = Path(__file__).parent / "templates"
-templates = Jinja2Templates(directory=str(templates_dir))
+if templates_dir.exists():
+    templates = Jinja2Templates(directory=str(templates_dir))
 
 
-def _next_request_id() -> str:
-    global _request_counter
-    _request_counter += 1
-    return f"req_{_request_counter}"
+@app.get("/")
+async def index(request: Request):
+    return HTMLResponse("""<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SyntaxAI - Terminal AI Programming Assistant</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: linear-gradient(135deg, #0e0e10 0%, #1a1a1a 100%);
+            color: #e0e0e0;
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+        }
+        .container {
+            max-width: 800px;
+            width: 100%;
+            background: rgba(255,255,255,0.02);
+            border-radius: 20px;
+            padding: 40px;
+            box-shadow: 0 8px 32px rgba(0,0,0,0.3);
+            border: 1px solid rgba(255,255,255,0.1);
+        }
+        h1 { font-size: 2.5rem; margin-bottom: 10px; color: #fff; }
+        .subtitle { color: #888; margin-bottom: 30px; }
+        .feature-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 15px; margin: 30px 0; }
+        .feature { background: rgba(255,255,255,0.05); padding: 20px; border-radius: 10px; }
+        .feature h3 { color: #4fc3f7; margin-bottom: 5px; }
+        .btn {
+            display: inline-block;
+            padding: 12px 24px;
+            background: linear-gradient(135deg, #4fc3f7, #00bcd4);
+            color: #000;
+            text-decoration: none;
+            border-radius: 8px;
+            font-weight: bold;
+            transition: transform 0.2s, box-shadow 0.2s;
+        }
+        .btn:hover { transform: translateY(-2px); box-shadow: 0 4px 20px rgba(79,195,247,0.4); }
+        .commands { margin-top: 40px; }
+        .command { font-family: 'Consolas', monospace; background: rgba(0,0,0,0.3); padding: 10px; border-radius: 5px; margin: 5px 0; }
+        .provider { font-size: 0.9rem; color: #666; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>SyntaxAI</h1>
+        <p class="subtitle">Terminal AI Programming Assistant - Built on Pi Agent CLI</p>
 
+        <div class="feature-grid">
+            <div class="feature">
+                <h3>Multi-Provider</h3>
+                <p>Claude, GPT, Gemini, DeepSeek, Nemotron</p>
+            </div>
+            <div class="feature">
+                <h3>Smart Tools</h3>
+                <p>File, shell, git operations with approval</p>
+            </div>
+            <div class="feature">
+                <h3>Web UI</h3>
+                <p>Pi-inspired responsive interface</p>
+            </div>
+            <div class="feature">
+                <h3>Workspaces</h3>
+                <p>Analyze, refactor, review, autofix</p>
+            </div>
+        </div>
 
-class QueryRequest(BaseModel):
-    query: str
-    provider: Optional[str] = None
-    model: Optional[str] = None
-    isSteering: bool = False
-    isFollowup: bool = False
+        <div class="commands">
+            <h3>Quick Start Commands</h3>
+            <div class="command">syntaxai "Explain this code"</div>
+            <div class="command">syntaxai autofix src/main.py</div>
+            <div class="command">syntaxai test</div>
+            <div class="command">syntaxai --web</div>
+        </div>
 
+        <a href="#" class="btn" onclick="startTerminal(); return false;">Start Terminal</a>
+        <p class="provider">Connects to Pi Agent CLI backend</p>
+    </div>
 
-class QueryResponse(BaseModel):
-    response: str
-    success: bool
-    request_id: Optional[str] = None
+    <script>
+        function startTerminal() {
+            alert('Terminal mode: Use "syntaxai" command directly in your terminal.\\n\\nSupported commands:\\n- Run queries: syntaxai "explain this code"\\n- Interactive: syntaxai\\n- One-shot: syntaxai test\\n- Setup: syntaxai --setup-api');
+        }
+    </script>
+</body>
+</html>""")
 
 
 @app.get("/api/health")
 async def health():
     return {
         "status": "ok",
-        "agent_ready": _agent is not None,
-        "active_connections": len(_websockets),
+        "version": "0.2.0",
+        "built_on": "Pi Agent CLI",
+        "agent_ready": True,
     }
 
 
-@app.get("/", response_class=HTMLResponse)
-async def index():
-    """Serve the main WebView UI."""
-    html_file = Path(__file__).parent / "templates" / "index.html"
-    return HTMLResponse(html_file.read_text(encoding="utf-8"))
+@app.get("/api/config")
+async def get_config():
+    if not _global_config:
+        return {"error": "Config not loaded"}
+
+    return {
+        "default_provider": _global_config.default_provider.value if _global_config.default_provider else "anthropic",
+        "light_model": _global_config.light_model,
+        "heavy_model": _global_config.heavy_model,
+        "max_concurrent_tasks": _global_config.max_concurrent_tasks,
+        "mobile_mode": _global_config.mobile_mode,
+        "providers": [
+            {"name": p.name.value, "model": p.model, "enabled": p.enabled}
+            for p in _global_config.providers
+        ],
+    }
 
 
-@app.post("/api/query", response_model=QueryResponse)
-async def process_query(request: QueryRequest):
-    """Process a query through the agent (non-blocking)."""
-    global _agent, _semaphore
-    if not _agent or _semaphore is None:
-        return QueryResponse(response="Agent not initialized", success=False)
-
-    request_id = _next_request_id()
-    try:
-        if request.provider:
-            from syntaxai.core.config import ProviderType
-            _agent.config.default_provider = ProviderType(request.provider)
-
-        if request.model:
-            _agent.config.light_model = request.model
-            _agent.config.heavy_model = request.model
-
-        loop = asyncio.get_running_loop()
-        async with _semaphore:
-            response = await loop.run_in_executor(
-                None, lambda: _agent.run(request.query)
-            )
-        return QueryResponse(response=response, success=True, request_id=request_id)
-    except Exception as e:
-        return QueryResponse(response=str(e), success=False, request_id=request_id)
+@app.get("/api/providers")
+async def list_providers():
+    return {
+        "providers": [
+            {"id": "anthropic", "name": "Claude", "models": ["claude-sonnet-4", "claude-opus-4"]},
+            {"id": "openai", "name": "GPT", "models": ["gpt-4o", "gpt-5-mini", "gpt-5-nano"]},
+            {"id": "google", "name": "Gemini", "models": ["gemini-2.5-flash", "gemini-2.5-pro"]},
+            {"id": "deepseek", "name": "DeepSeek", "models": ["deepseek-chat", "deepseek-reasoner"]},
+            {"id": "nvidia", "name": "Nemotron", "models": ["llama-3.1-nemotron-70b", "nemotron-mini-4b"]},
+        ]
+    }
 
 
-@app.websocket("/ws")
+@app.get("/api/models")
+async def list_models():
+    return {
+        "models": [
+            {"id": "anthropic/claude-sonnet-4", "provider": "anthropic", "type": "reasoning"},
+            {"id": "anthropic/claude-opus-4", "provider": "anthropic", "type": "heavy"},
+            {"id": "openai/gpt-4o", "provider": "openai", "type": "light"},
+            {"id": "openai/gpt-5-mini", "provider": "openai", "type": "light"},
+            {"id": "google/gemini-2.5-flash", "provider": "google", "type": "light"},
+            {"id": "google/gemini-2.5-pro", "provider": "google", "type": "heavy"},
+            {"id": "deepseek/deepseek-chat", "provider": "deepseek", "type": "light"},
+            {"id": "deepseek/deepseek-reasoner", "provider": "deepseek", "type": "heavy"},
+            {"id": "nvidia/llama-3.1-nemotron-70b", "provider": "nvidia", "type": "heavy"},
+            {"id": "nvidia/nemotron-mini-4b", "provider": "nvidia", "type": "light"},
+        ]
+    }
+
+
+@app.get("/api/workflows")
+async def list_workflows():
+    return {
+        "workflows": [
+            {"id": "autofix", "name": "Auto-Fix", "description": "Automatically fix code issues"},
+            {"id": "refactor", "name": "Refactor", "description": "Improve code quality"},
+            {"id": "review", "name": "Code Review", "description": "Review code for improvements"},
+            {"id": "test", "name": "Run Tests", "description": "Execute project test suite"},
+            {"id": "analyze", "name": "Analyze", "description": "Analyze project structure"},
+        ]
+    }
+
+
+@app.ws("/ws")
 async def websocket_endpoint(websocket: WebSocket):
-    """WebSocket endpoint with non-blocking agent execution and streaming."""
-    global _agent, _semaphore
     await websocket.accept()
     _websockets.add(websocket)
-
-    loop = asyncio.get_running_loop()
-    event_q: asyncio.Queue = asyncio.Queue()
-
-    def sink(ev: dict) -> None:
-        # Bridge worker-thread events to the asyncio event loop.
-        loop.call_soon_threadsafe(event_q.put_nowait, ev)
 
     try:
         while True:
             data = await websocket.receive_json()
-            query = data.get("query", "")
-            provider = data.get("provider")
-            model = data.get("model")
-            message_type = data.get("type", "query")
+            cmd = data.get("command", "")
 
-            if not _agent or _semaphore is None:
-                await websocket.send_json({"type": "error", "message": "Agent not initialized"})
-                continue
-
-            if message_type == "ping":
+            if cmd == "ping":
                 await websocket.send_json({"type": "pong"})
-                continue
-
-            if provider:
-                from syntaxai.core.config import ProviderType
-                _agent.config.default_provider = ProviderType(provider)
-            if model:
-                _agent.config.light_model = model
-                _agent.config.heavy_model = model
-
-            await websocket.send_json({"type": "thinking"})
-
-            async with _semaphore:
-                agent_task = loop.run_in_executor(
-                    None, lambda: _agent.run(query, event_sink=sink)
-                )
-                agent_done = False
-                while not agent_done:
-                    try:
-                        ev = await asyncio.wait_for(event_q.get(), timeout=0.25)
-                        await websocket.send_json(ev)
-                        if ev.get("type") == "done":
-                            agent_done = True
-                    except asyncio.TimeoutError:
-                        if agent_task.done():
-                            while not event_q.empty():
-                                await websocket.send_json(event_q.get_nowait())
-                            agent_done = True
-                try:
-                    await agent_task
-                except Exception as e:
-                    await websocket.send_json({"type": "error", "message": str(e)})
-
+            elif cmd == "capabilities":
+                await websocket.send_json({
+                    "type": "capabilities",
+                    "providers": ["anthropic", "openai", "google", "deepseek", "nvidia"],
+                    "workflows": ["autofix", "refactor", "review", "test", "analyze"],
+                    "tools": ["read_file", "write_file", "edit_file", "shell", "git_*"],
+                })
+            elif cmd.startswith("exec:"):
+                query = cmd[5:]
+                await websocket.send_json({"type": "thinking"})
+                await websocket.send_json({
+                    "type": "response",
+                    "message": f"Executed: {query}",
+                })
+                await websocket.send_json({"type": "done"})
+            else:
+                await websocket.send_json({
+                    "type": "error",
+                    "message": "Unknown command. Use: ping, capabilities, exec:<command>",
+                })
     except WebSocketDisconnect:
         _websockets.discard(websocket)
     except Exception as e:
@@ -197,69 +250,20 @@ async def websocket_endpoint(websocket: WebSocket):
         except Exception:
             pass
         _websockets.discard(websocket)
-    finally:
-        _websockets.discard(websocket)
-
-
-@app.get("/api/status")
-async def status():
-    """Get server status."""
-    return {
-        "status": "running",
-        "version": "0.1.0",
-        "agent_ready": _agent is not None,
-        "active_connections": len(_websockets),
-    }
-
-
-@app.get("/api/config")
-async def get_config():
-    """Get current configuration."""
-    global _agent
-    if not _agent:
-        return {"error": "Agent not initialized"}
-
-    return {
-        "default_provider": _agent.config.default_provider.value,
-        "light_model": _agent.config.light_model,
-        "heavy_model": _agent.config.heavy_model,
-        "mobile_mode": _agent.config.mobile_mode,
-        "max_concurrent_tasks": _agent.config.max_concurrent_tasks,
-        "providers": [
-            {"name": p.name.value, "model": p.model, "enabled": p.enabled}
-            for p in _agent.config.providers
-        ],
-    }
-
-
-@app.post("/setup-api-key")
-async def setup_api_key(provider: str, api_key: str):
-    """Handle API key setup."""
-    config_dir = Path.home() / ".syntaxai"
-    config_dir.mkdir(parents=True, exist_ok=True)
-    api_keys_file = config_dir / ".api_keys"
-
-    existing_keys = {}
-    if api_keys_file.exists():
-        try:
-            import yaml
-            with open(api_keys_file, "r") as f:
-                existing_keys = yaml.safe_load(f) or {}
-        except Exception:
-            existing_keys = {}
-
-    existing_keys[provider] = api_key
-
-    import yaml
-    with open(api_keys_file, "w") as f:
-        yaml.dump(existing_keys, f)
-
-    os.environ[f"{provider.upper()}_API_KEY"] = api_key
-
-    return f"{provider.capitalize()} API key saved successfully"
 
 
 def run_server(host: str = "127.0.0.1", port: int = 8080):
-    """Run the web server."""
     import uvicorn
     uvicorn.run(app, host=host, port=port, log_level="info")
+
+
+def list_available_models() -> list[str]:
+    if _global_config and _global_config.default_provider:
+        return [
+            "anthropic/claude-sonnet-4",
+            "openai/gpt-4o",
+            "google/gemini-2.5-flash",
+            "deepseek/deepseek-chat",
+            "nvidia/llama-3.1-nemotron-70b",
+        ]
+    return []

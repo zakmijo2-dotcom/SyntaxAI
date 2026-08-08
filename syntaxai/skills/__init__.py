@@ -1,22 +1,19 @@
 """Skill loading and parsing for SyntaxAI.
 
-Mobile optimisation: skills are parsed **lazily**. ``extract_skills_from_project``
-reads only the YAML front-matter (cheap) and caches the parsed metadata; the
-( potentially large) markdown body is loaded via ``load_skill_full`` only when a
-skill actually matches the current request. This avoids dragging every skill's
-full text into the context window on a small device.
+Skills are extended capabilities that can be enabled per-project via .skills/ directory.
+They follow a YAML frontmatter + markdown body format.
 """
 
 from __future__ import annotations
 
 import os
-import yaml
-from pathlib import Path
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Optional
 
-# Metadata cache: (file_path, mtime) -> SkillDefinition (content empty)
-_METADATA_CACHE: dict[tuple[str, float], "SkillDefinition"] = {}
+import yaml
+
+_METADATA_CACHE: dict[tuple[str, float], SkillDefinition] = {}
 
 
 @dataclass
@@ -32,11 +29,7 @@ class SkillDefinition:
         return bool(self.content)
 
 
-def load_skill_file(skill_path: str) -> Optional[SkillDefinition]:
-    """Load only the *metadata* (front-matter) of a skill file.
-
-    The body is not read here; use :func:`load_skill_full` to fetch it.
-    """
+def load_skill_file(skill_path: str) -> SkillDefinition | None:
     try:
         path = Path(skill_path)
         if not path.exists():
@@ -47,7 +40,7 @@ def load_skill_file(skill_path: str) -> Optional[SkillDefinition]:
         if cache_key in _METADATA_CACHE:
             return _METADATA_CACHE[cache_key]
 
-        with open(path, "r", encoding="utf-8") as f:
+        with open(path, encoding="utf-8") as f:
             content = f.read()
 
         frontmatter, _body = parse_markdown_frontmatter(content)
@@ -64,7 +57,7 @@ def load_skill_file(skill_path: str) -> Optional[SkillDefinition]:
             name=name,
             description=description,
             triggers=triggers,
-            content="",  # lazy
+            content="",
             file_path=str(path),
             enabled=frontmatter.get("enabled", True),
         )
@@ -77,10 +70,6 @@ def load_skill_file(skill_path: str) -> Optional[SkillDefinition]:
 
 
 def load_skill_full(skill: SkillDefinition) -> str:
-    """Read and cache the full markdown body of *skill*.
-
-    Returns the body text (or an empty string on failure). Idempotent.
-    """
     if skill.is_loaded():
         return skill.content
 
@@ -88,7 +77,7 @@ def load_skill_full(skill: SkillDefinition) -> str:
     try:
         if not path.exists():
             return ""
-        with open(path, "r", encoding="utf-8") as f:
+        with open(path, encoding="utf-8") as f:
             content = f.read()
         _front, body = parse_markdown_frontmatter(content)
         skill.content = body.strip()
@@ -98,8 +87,7 @@ def load_skill_full(skill: SkillDefinition) -> str:
         return ""
 
 
-def parse_markdown_frontmatter(content: str) -> tuple[Optional[dict], str]:
-    """Parse YAML frontmatter from markdown content."""
+def parse_markdown_frontmatter(content: str) -> tuple[dict | None, str]:
     if not content.startswith("---"):
         return None, content
 
@@ -118,7 +106,6 @@ def parse_markdown_frontmatter(content: str) -> tuple[Optional[dict], str]:
 
 
 def extract_skills_from_project(project_path: str = None) -> list[SkillDefinition]:
-    """Extract skill *metadata* from the ``.skills/`` directory (fast path)."""
     return _extract_skills(project_path)
 
 
@@ -148,15 +135,7 @@ def _extract_skills(project_path: str = None) -> list[SkillDefinition]:
     return skills
 
 
-def load_skills(path: str = None) -> list[SkillDefinition]:
-    """Alias for :func:`extract_skills_from_project`."""
-    return extract_skills_from_project(path)
-
-
-def find_matching_skills(
-    query: str, skills: list[SkillDefinition]
-) -> list[SkillDefinition]:
-    """Find skills matching *query* by trigger / name / description."""
+def find_matching_skills(query: str, skills: list[SkillDefinition]) -> list[SkillDefinition]:
     query_lower = query.lower()
     matching: list[SkillDefinition] = []
 
@@ -174,64 +153,19 @@ def find_matching_skills(
     return matching
 
 
-def skill_matches_trigger(
-    trigger: str, skills: list[SkillDefinition]
-) -> list[SkillDefinition]:
-    return [
-        s for s in skills
-        if trigger.lower() in s.name.lower()
-        or any(t.lower() == trigger.lower() for t in s.triggers)
-    ]
-
-
-def get_skill_by_name(
-    name: str, skills: list[SkillDefinition]
-) -> Optional[SkillDefinition]:
+def get_skill_by_name(name: str, skills: list[SkillDefinition]) -> SkillDefinition | None:
     for skill in skills:
         if skill.name.lower() == name.lower():
             return skill
     return None
 
 
-def list_all_skills(skills_dir: str = None) -> list[str]:
-    if skills_dir is None:
-        skills_dir = os.environ.get(
-            "SYNTAXAI_SKILLS_DIR", str(Path.home() / ".syntaxai" / "skills")
-        )
-
-    skills_path = Path(skills_dir)
-    if not skills_path.exists():
-        return []
-
-    out: list[str] = []
-    for item in sorted(skills_path.iterdir()):
-        if item.is_dir() and (item / "SKILL.md").exists():
-            skill_md = item / "SKILL.md"
-            try:
-                with open(skill_md) as f:
-                    content = f.read()
-                frontmatter, _ = parse_markdown_frontmatter(content)
-                if frontmatter:
-                    name = frontmatter.get("name", item.name)
-                    status = "✓" if frontmatter.get("enabled", True) else "✗"
-                    out.append(f"{status} {name}")
-                else:
-                    out.append(f"? {item.name}")
-            except Exception:
-                out.append(f"? {item.name}")
-
-    return out
-
-
-def inject_skill_context(skill: SkillDefinition) -> str:
-    """Format a skill (loading its full body if needed) for the prompt."""
+def format_skill_context(skill: SkillDefinition) -> str:
     body = skill.content or load_skill_full(skill)
-    return f"""
-=== SKILL CONTEXT ===
+    return f"""=== SKILL CONTEXT ===
 Name: {skill.name}
 Description: {skill.description}
 
-Full skill definition:
 {body}
 === END SKILL CONTEXT ===
 """

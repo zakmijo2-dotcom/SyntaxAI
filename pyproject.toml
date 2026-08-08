@@ -4,34 +4,46 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "syntaxai"
-version = "0.1.0"
-description = "SyntaxAI - Terminal AI Programming Assistant"
+version = "0.2.0"
+description = "SyntaxAI - Terminal AI Programming Assistant built on Pi Agent CLI"
 readme = "README.md"
 requires-python = ">=3.10"
 license = {text = "MIT"}
 authors = [
     {name = "SyntaxAI Team"}
 ]
-keywords = ["ai", "cli", "agent", "programming", "assistant"]
+keywords = ["ai", "cli", "agent", "programming", "assistant", "pi", "coding"]
 classifiers = [
-    "Development Status :: 3 - Alpha",
+    "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",
     "License :: OSI Approved :: MIT License",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
     "Topic :: Software Development :: Tools :: IDEs :: CLI Tools",
+    "Framework :: AsyncIO",
 ]
 dependencies = [
+    "pi-py-sdk>=0.2.0",
+    "pi-llm>=0.1.0",
+    "pi-llm-agent>=0.1.0",
     "pyyaml>=6.0",
-    "httpx>=0.24.0",
 ]
 
 [project.optional-dependencies]
-web = ["fastapi>=0.100.0", "uvicorn>=0.23.0", "jinja2>=3.1.0"]
-gemini = ["google-generativeai>=0.5.0"]
-dev = ["pytest>=7.0.0", "ruff>=0.1.0", "mypy>=1.0.0"]
+web = [
+    "fastapi>=0.100.0",
+    "uvicorn>=0.23.0",
+    "jinja2>=3.1.0",
+    "python-multipart>=0.0.6",
+]
+dev = [
+    "pytest>=7.0.0",
+    "ruff>=0.1.0",
+    "mypy>=1.0.0",
+]
 
 [project.scripts]
 syntaxai = "main:main"
@@ -39,6 +51,7 @@ syntaxai = "main:main"
 [project.urls]
 Homepage = "https://github.com/SyntaxAI/syntaxai"
 Repository = "https://github.com/SyntaxAI/syntaxai.git"
+Documentation = "https://github.com/SyntaxAI/syntaxai#readme"
 
 [tool.setuptools.packages.find]
 where = ["."]
@@ -49,10 +62,15 @@ line-length = 100
 target-version = "py310"
 
 [tool.ruff.lint]
-select = ["E", "F", "W", "I", "N"]
+select = ["E", "F", "W", "I", "N", "UP", "B", "C4"]
 
 [tool.mypy]
 python_version = "3.10"
 warn_return_any = true
 warn_unused_configs = true
 disallow_untyped_defs = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_functions = ["test_*"]

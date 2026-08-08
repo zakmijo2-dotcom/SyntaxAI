@@ -1,10 +1,12 @@
-"""SyntaxAI - Terminal AI Programming Assistant."""
+"""SyntaxAI - Terminal AI Programming Assistant built on Pi Agent CLI."""
 
-from syntaxai.core.config import Config, ProviderType
-from syntaxai.core.context import ContextManager, Message
-from syntaxai.core.agent import Agent
-
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 __author__ = "SyntaxAI Team"
 
-__all__ = ["Config", "ProviderType", "ContextManager", "Message", "Agent"]
+__all__ = [
+    "PiSyntaxAgent",
+    "Config",
+    "ProviderType",
+    "SyntaxAItool",
+    "Skill",
+]
