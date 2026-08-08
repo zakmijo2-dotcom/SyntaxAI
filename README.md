@@ -1,164 +1,184 @@
-# SyntaxAI - Terminal AI Programming Assistant
+# SyntaxAI
 
-## Overview
-SyntaxAI is a terminal-based programming assistant that transforms the terminal into an intelligent code editor. It supports:
-- Multi-model LLM integration (Google Gemini, DeepSeek V4 Flash, NVIDIA Nemotron)
-- Project file analysis and modification
-- Shell command execution with safety approvals
-- Git/GitHub integration
-- Custom skill loading via `.skills/` directory
-- **WebView UI** - Modern web-based interface connecting to local server
+> **Terminal AI Programming Assistant** - Transform your terminal into an intelligent coding partner with multi-LLM support, safety approvals, and a Pi-inspired WebView interface.
 
-## Key Features
-✅ **Smart Model Selection** - Automatic lightweight/heavy model switching based on task complexity  
-✅ **Safety Approval System** - Explicit user confirmation required for SAFE/MEDIUM/HIGH risk operations  
-✅ **File Operation Protection** - Automatic blocking of sensitive paths (`.env`, `*.key`, `.git/`)  
-✅ **Interactive REPL** - Natural language interface for code editing and execution  
-✅ **Git Integration** - Full GitHub CLI support with change previews  
-✅ **Skill System** - Extensible custom skills repository  
-✅ **Web UI** - Browser-based interface with real-time WebSocket communication  
+[![GitHub](https://img.shields.io/badge/GitHub-Repository-181717?logo=github)](https://github.com/zakmijo2-dotcom/SyntaxAI)
+[![License](https://img.shields.io/badge/License-MIT-yellow.svg)](https://github.com/zakmijo2-dotcom/SyntaxAI/blob/main/LICENSE)
+[![Python](https://img.shields.io/badge/Python-3.10%2B-blue.svg)](https://www.python.org/downloads/)
+[![Web UI](https://img.shields.io/badge/WebUI-Pi--Inspired-00d4aa.svg)](https://github.com/zakmijo2-dotcom/SyntaxAI)
 
-## Installation
+## �� 🚀 Quick Start
 
-### Quick Install (All Platforms)
 ```bash
-# Clone the repository
+# Install and run in one line (Linux/macOS/WSL)
+curl -fsSL https://raw.githubusercontent.com/zakmijo2-dotcom/SyntaxAI/main/install.sh | bash
+
+# Or manually:
 git clone https://github.com/zakmijo2-dotcom/SyntaxAI.git
 cd SyntaxAI
-
-# Run the installer (auto-detects Termux, Codespaces, Gitpod, Local)
-bash install.sh
-```
-
-### Termux (Android) - Detailed Steps
-```bash
-# 1. Install Termux from F-Droid (recommended) or Play Store
-# 2. Run these commands in Termux:
-pkg update && pkg upgrade -y
-pkg install -y git python
-
-# 3. Clone and install
-git clone https://github.com/zakmijo2-dotcom/SyntaxAI.git
-cd SyntaxAI
-bash install.sh
-
-# 4. Start CLI
-python3 main.py
-
-# 5. Start Web UI (Termux)
-bash ~/.syntaxai/start_web.sh
-# Then open http://127.0.0.1:8080 in your browser
-```
-
-### GitHub Codespaces
-```bash
-# In Codespaces terminal:
-git clone https://github.com/zakmijo2-dotcom/SyntaxAI.git
-cd SyntaxAI
-bash install.sh
-
-# Start CLI
-python3 main.py
-
-# Start Web UI
-python3 main.py --web
-# Then open the forwarded port 8080
-```
-
-### Local Development
-```bash
-# Prerequisites: Python 3.10+
-git clone https://github.com/zakmijo2-dotcom/SyntaxAI.git
-cd SyntaxAI
-python3 -m venv venv
-source venv/bin/activate
-pip install -r requirements.txt
-
-# Start CLI
-python3 main.py
-
-# Start Web UI
-python3 main.py --web
-# Open http://127.0.0.1:8080 in browser
-```
-
-## API Key Setup
-```bash
-# Interactive setup (works in CLI and Web UI)
-syntaxai --setup-api
+bash install.sh          # Auto-detects Termux/Codespaces/Local
+syntaxai --setup-api     # Configure your LLM API key
+syntaxai                 # Start the terminal assistant
 # or
-python3 main.py --setup-api
+syntaxai --web           # Start the Pi-inspired Web UI
 ```
 
-### Supported Providers
-- **Google Gemini** (`GOOGLE_API_KEY` or `gemini_api_key`)
-- **DeepSeek** (`DEEPSEEK_API_KEY` or `deepseek_api_key`)
-- **NVIDIA Nemotron** (`NEMOTRON_API_KEY` or `nemotron_api_key`)
+## � ✨ Key Features
 
-Set via environment variables or interactive setup.
+| Feature | Description |
+|---------|-------------|
+| **���🧠 Smart LLM Routing** | Auto-switches between lightweight/heavy models based on task complexity |
+| **���🛡��️ Safety-First Design** | Explicit approval required for SAFE/MEDIUM/HIGH risk operations |
+| **���🔒 File Protection** | Automatic blocking of sensitive paths (`.env`, `*.key`, `.git/`) |
+| **���💻 Dual Interface** | Terminal REPL + Pi-inspired WebView UI (WebSocket real-time) |
+| **���🔧 Git Integration** | Full GitHub CLI with change previews and approval workflow |
+| **���🎯 Skill System** | Extensible `.skills/` directory for custom capabilities |
+| **���📊 Session Management** | Persistent chat history with export/share capabilities |
+| **���🖥��️ Cross-Platform** | Works on Termux, GitHub Codespaces, Gitpod, Linux, macOS, WSL |
 
-## Usage
+## �� 📦 Installation
 
-### CLI Mode (Terminal REPL)
+### Automatic Installer (Recommended)
+```bash
+bash <(curl -s https://raw.githubusercontent.com/zakmijo2-dotcom/SyntaxAI/main/install.sh)
+```
+
+### Manual Installation
+```bash
+# 1. Clone repository
+git clone https://github.com/zakmijo2-dotcom/SyntaxAI.git
+cd SyntaxAI
+
+# 2. Install dependencies
+bash install.sh          # Handles Termux/Codespaces/Local detection
+
+# 3. Configure API key
+syntaxai --setup-api     # Interactive setup for Gemini/DeepSeek/Nemotron
+
+# 4. Choose your interface:
+syntaxai                 # Terminal REPL (default)
+# OR
+syntaxai --web           # Pi-inspired Web UI (http://localhost:8080)
+```
+
+### Platform-Specific Notes
+- **Termux**: Auto-installs dependencies, creates `~/.syntaxai/start_web.sh` launcher
+- **Codespaces/Gitpod**: Works out-of-the-box with forwarded ports
+- **Local/Linux/macOS/WSL**: Standard Python venv or global installation
+
+## �� 💻 Usage
+
+### Terminal REPL
 ```bash
 # Interactive session
 syntaxai
-# or
-python3 main.py
 
-# One-shot query
-syntaxai "Read README.md and summarize key points"
+# One-shot commands
+syntaxai "Explain this Python decorator pattern"
+syntaxai -p deepseek "Write a REST API in FastAPI"
+syntaxai --model gemini-1.5-pro "Refactor this JavaScript for performance"
 
-# With specific provider
-syntaxai -p deepseek "Explain this code"
+# Session management
+help        # Show available commands
+clear       # Clear conversation context
+project     # Show current project information
+skills      # List loaded skills from .skills/ directory
 ```
 
-### Web UI Mode (WebView)
+### WebView UI (Pi-Inspired)
 ```bash
-# Start web server
-python3 main.py --web
+# Start server
+syntaxai --web
 
-# Custom host/port
-python3 main.py --web --host 0.0.0.0 --port 8080
+# Custom host/port (for Docker, cloud, etc.)
+syntaxai --web --host 0.0.0.0 --port 8080
 
-# Termux (background with auto-browser)
-bash ~/.syntaxai/start_web.sh
+# Termux background service
+bash ~/.syntaxai/start_web.sh  # Auto-launches browser
 ```
 
 **Web UI Features:**
-- Real-time chat with WebSocket connection
-- Provider/model selection dropdown
-- Code syntax highlighting
-- Conversation history
-- Responsive design (mobile-friendly)
+- �� 🎯 **Pi-exact interface**: Dark theme, header/footer layout, message styling
+- �� ⚡ **Real-time communication**: WebSocket-based instant updates
+- �� ⌨��️ **Pi keybindings**: Enter (steering), Alt+Enter (follow-up), Ctrl+C (clear), Ctrl+V (paste)
+- �� 💬 **Rich messaging**: Syntax highlighting, code blocks, tool call visualization
+- �� 📱 **Fully responsive**: Works on mobile, tablet, and desktop browsers
+- �� 🔐 **Same security**: Approval systems and file protections apply equally
 
-### Available Commands (Both CLI & Web UI)
-
+### Available Commands (Both Interfaces)
 | Command | Description |
 |---------|-------------|
-| `read_file(path)` | Read file contents |
-| `write_file(path, content)` | Write file contents |
-| `edit_file(path, old, new)` | Edit file with diff |
-| `list_tree(path, depth)` | Show directory tree |
-| `shell(command)` | Execute shell command (requires approval) |
-| `git_status` | Show git status |
-| `git_diff` | Show git diff |
-| `git_commit(message)` | Commit changes |
-| `git_push(remote, branch)` | Push to remote |
+| `read_file(path)` | Read file contents with encoding detection |
+| `write_file(path, content)` | Create or overwrite files |
+| `edit_file(path, old, new)` | Precise diff-based editing (not full replacement) |
+| `list_tree(path, depth=3)` | Display directory tree with customizable depth |
+| `shell(command)` | Execute shell command with safety approval |
+| `git_status` | Show repository status with file staging |
+| `git_diff` | View changes with optional granularity control |
+| `git_commit(message)` | Commit staged changes with descriptive message |
+| `git_push(remote, branch)` | Push to remote with upstream tracking |
 
-### CLI Shortcuts
-| Key | Action |
-|-----|--------|
-| `help` | Show help |
-| `clear` | Clear conversation context |
-| `project` | Show current project info |
-| `skills` | List available skills |
-| `exit` / `quit` | Exit REPL |
+## �� 🔐 Security & Safety
 
-## Deployment
+SyntaxAI implements a defense-in-depth security model:
 
-### Production Web UI (Docker)
+### �� ⚠��️ Risk-Based Approval System
+| Risk Level | Examples | Approval Required |
+|------------|----------|-------------------|
+| **SAFE** | `ls`, `cat`, `git status`, `echo` | None (auto-executed) |
+| **MEDIUM** | `git commit`, `pip install`, `shell script` | Simple confirmation |
+| **HIGH** | `rm -rf`, `git push --force`, `chmod 777` | Explicit double confirmation |
+
+### �� 🛡��️ Protective Measures
+- **File System**: Automatic blocking of `.env`, `*.{key,pem,crt}`, `.git/`, `/proc/`, `/sys/`
+- **Command Validation**: Prevention of dangerous patterns (`rm -rf /`, `dd if=`, `mkfs`)
+- **Environment Sandboxing**: Operations restricted to user-accessible paths
+- **Audit Logging**: All commands logged to `~/.syntaxai/logs/commands_YYYY-MM-DD.jsonl`
+- **Network Safety**: Web UI binds to localhost by default (use `--host 0.0.0.0` for external)
+
+## �� 📁 Project Structure
+
+```
+SyntaxAI/
+├── main.py                 # CLI entry point (supports --web flag)
+├── install.sh              # Cross-platform installer with environment detection
+├── requirements.txt        # Core dependencies (+web optional)
+├── pyproject.toml          # Package configuration and metadata
+├── README.md               # This documentation file
+├── syntaxai/
+│   ├── __init__.py
+│   ├── core/
+│   │   ├── config.py         # Configuration management (YAML + env vars)
+│   │   ├── context.py        # Conversation history and context management
+│   │   └── agent.py          # Main agent loop with tool orchestration
+│   ├── providers/
+│   │   ├── base.py           # Abstract LLM provider interface
+│   │   ├── gemini.py         # Google Gemini integration
+│   │   ├── deepseek.py       # DeepSeek V4/Chat integration
+│   │   └── nemotron.py       # NVIDIA Nemotron integration
+│   ├── tools/
+│   │   ├── fs_tools.py       # File system operations (read/write/edit/list)
+│   │   ├── shell_tools.py    # Shell command execution with approval system
+│   │   ├── git_tools.py      # GitHub/Git integration (status, diff, commit, push)
+│   │   └── skills_loader.py  # Dynamic skill loading from .skills/ directory
+│   ├── safety/
+│   │   ├── approval.py       # User approval and audit logging system
+│   │   └── risk_rules.py     # Command risk classification (SAFE/MEDIUM/HIGH)
+│   ├── ui/
+│   │   └── terminal_ui.py    # Terminal UI components (colors, formatting, prompts)
+│   └── web/
+│       ├── server.py         # FastAPI server with WebSocket support
+│       ├── templates/
+│       │   └── index.html    # Pi-inspired WebView UI (HTML/CSS/JS)
+│       └── static/           # Static assets (CSS, JavaScript, images)
+�└── .skills/                # Directory for custom Agent Skills packages
+```
+
+## �� 🐳 Deployment Options
+
+### Docker (Production)
 ```dockerfile
+# Dockerfile
 FROM python:3.11-slim
 
 WORKDIR /app
@@ -174,22 +194,12 @@ CMD ["python3", "main.py", "--web", "--host", "0.0.0.0", "--port", "8080"]
 ```bash
 # Build and run
 docker build -t syntaxai .
-docker run -p 8080:8080 -e GOOGLE_API_KEY=your_key syntaxai
-```
-
-### Termux Background Service
-```bash
-# Create a simple service script
-cat > ~/.syntaxai/run_web_bg.sh << 'EOF'
-#!/usr/bin/env bash
-cd ~/SyntaxAI
-nohup python3 main.py --web --host 0.0.0.0 --port 8080 > ~/syntaxai_web.log 2>&1 &
-echo $! > ~/syntaxai_web.pid
-echo "Web UI started on http://127.0.0.1:8080 (PID: $!)"
-EOF
-
-chmod +x ~/.syntaxai/run_web_bg.sh
-~/.syntaxai/run_web_bg.sh
+docker run -d \
+  -p 8080:8080 \
+  -e GOOGLE_API_KEY=your_key_here \
+  --restart unless-stopped \
+  --name syntaxai \
+  syntaxai
 ```
 
 ### Systemd Service (Linux)
@@ -197,89 +207,111 @@ chmod +x ~/.syntaxai/run_web_bg.sh
 # /etc/systemd/system/syntaxai-web.service
 [Unit]
 Description=SyntaxAI Web UI
-After=network.target
+After=network-online.target
+Wants=network-online.target
 
 [Service]
 Type=simple
-User=youruser
-WorkingDirectory=/home/youruser/SyntaxAI
-ExecStart=/home/youruser/SyntaxAI/venv/bin/python main.py --web --host 0.0.0.0 --port 8080
+User=%i
+WorkingDirectory=/home/%i/SyntaxAI
+ExecStart=/home/%i/SyntaxAI/venv/bin/python main.py --web --host 0.0.0.0 --port 8080
 Restart=on-failure
-Environment=GOOGLE_API_KEY=your_key
+RestartSec=10
+Environment=GOOGLE_API_KEY=your_key_here
 
 [Install]
 WantedBy=multi-user.target
 ```
 
 ```bash
-sudo systemctl enable syntaxai-web
-sudo systemctl start syntaxai-web
+# Enable and start
+sudo systemctl daemon-reload
+sudo systemctl enable syntaxai-web@$USER
+sudo systemctl start syntaxai-web@$USER
 ```
 
-## Security Notes
-- HIGH-risk commands (e.g., `rm -rf`, `git push --force`) require explicit approval
-- Sensitive files are automatically blocked (`.env`, `*.key`, `.git/`)
-- All executed commands are logged to `~/.syntaxai/logs/commands_YYYY-MM-DD.jsonl`
-- Web UI runs on localhost only by default (use `--host 0.0.0.0` for external access)
+### Termux Background Service
+```bash
+# Create auto-start script
+cat > ~/.syntaxai/start_web_bg.sh << 'EOF'
+#!/usr/bin/env bash
+cd ~/SyntaxAI
+nohup python3 main.py --web --host 0.0.0.0 --port 8080 > ~/syntaxai_web.log 2>&1 &
+echo $! > ~/syntaxai_web.pid
+echo "[$(date)] Web UI started on http://127.0.0.1:8080 (PID: $!)" >> ~/syntaxai_web.log
+EOF
 
-## Project Structure
-```
-SyntaxAI/
-├── main.py                 # CLI entry point (supports --web flag)
-├── install.sh              # Cross-platform installer
-├── requirements.txt        # Python dependencies
-├── pyproject.toml          # Package configuration
-├── README.md               # This file
-├── syntaxai/
-│   ├── __init__.py
-│   ├── core/
-│   │   ├── config.py       # Configuration management
-│   │   ├── context.py      # Conversation context
-│   │   └── agent.py        # Agent loop logic
-│   ├── providers/
-│   │   ├── base.py         # LLM provider interface
-│   │   ├── gemini.py       # Google Gemini
-│   │   ├── deepseek.py     # DeepSeek V4
-│   │   └── nemotron.py     # NVIDIA Nemotron
-│   ├── tools/
-│   │   ├── fs_tools.py     # File operations
-│   │   ├── shell_tools.py  # Shell commands
-│   │   ├── git_tools.py    # Git integration
-│   │   └── skills_loader.py # Skill system
-│   ├── safety/
-│   │   ├── approval.py     # Approval system
-│   │   └── risk_rules.py   # Risk classification
-│   ├── ui/
-│   │   └── terminal_ui.py  # Terminal UI components
-│   └── web/
-│       ├── server.py       # FastAPI web server
-│       ├── templates/
-│       │   └── index.html  # WebView UI
-│       └── static/         # Static assets
-└── .skills/                # Custom skills directory
+chmod +x ~/.syntaxai/start_web_bg.sh
+# Add to Termux boot scripts if desired
 ```
 
-## Troubleshooting
+## �� 🔧 Configuration
 
-| Issue | Solution |
-|-------|----------|
-| "Missing dependencies" | Run `pip install -r requirements.txt` |
-| "Web UI deps not installed" | Run `pip install fastapi uvicorn jinja2` |
-| API key issues | Verify env vars or run `syntaxai --setup-api` |
-| Permission denied (Termux) | Run `termux-setup-storage` |
-| Web UI won't load | Check server logs, verify port 8080 free |
-| Termux pkg errors | Run `pkg update && pkg upgrade` first |
+SyntaxAI uses a layered configuration approach:
 
-## License
-MIT License - See `LICENSE` file for details.
+1. **Defaults**: Built-in safe defaults
+2. **Config File**: `~/.syntaxai/config.yaml` (YAML format)
+3. **Environment Variables**: `GOOGLE_API_KEY`, `DEEPSEEK_API_KEY`, `NEMOTRON_API_KEY`
+4. **Runtime Flags**: `--provider`, `--model`, `--light`, etc.
 
-## Contributing
-1. Fork the repository
-2. Create a feature branch
-3. Make your changes
-4. Run tests: `python -m pytest`
-5. Submit a PR
+### Example config.yaml
+```yaml
+default_provider: gemini
+light_model: gemini-1.5-flash
+heavy_model: gemini-1.5-pro
+max_context_length: 16000
+auto_approve_safe_commands: true
+log_commands: true
+providers:
+  - name: gemini
+    api_key: null  # Set via env var or interactive setup
+    model: gemini-1.5-flash
+    enabled: true
+  - name: deepseek
+    api_key: null
+    model: deepseek-chat
+    enabled: true
+  - name: nemotron
+    api_key: null
+    model: nemotron-mini
+    enabled: true
+```
 
-## Links
-- **Repository**: https://github.com/zakmijo2-dotcom/SyntaxAI
-- **Issues**: https://github.com/zakmijo2-dotcom/SyntaxAI/issues
+## �� 🐛 Troubleshooting
+
+| Symptom | Solution |
+|---------|----------|
+| `Missing dependencies` | Run `pip install -r requirements.txt` |
+| `Web UI deps not installed` | Run `pip install fastapi uvicorn jinja2` |
+| `API key not working` | Verify spelling or run `syntaxai --setup-api` |
+| `Permission denied (Termux)` | Run `termux-setup-storage` and retry |
+| `Port already in use` | Use `--port 8081` or kill existing process |
+| `Web UI won't load` | Check browser console, verify server is running |
+| `Slow response` | Check API key validity and network connectivity |
+| `High token usage` | Use lighter models for simple tasks (`--light` flag) |
+
+## �� 📚 Documentation
+
+- [Installation Guide](https://github.com/zakmijo2-dotcom/SyntaxAI/blob/main/install.sh) - Cross-platform installer
+- [API Reference](https://github.com/zakmijo2-dotcom/SyntaxAI/tree/main/syntaxai) - Module documentation
+- [Skill Development](https://github.com/zakmijo2-dotcom/SyntaxAI/tree/main/.skills/example-skill) - Create custom skills
+- [Deployment Guide](https://github.com/zakmijo2-dotcom/SyntaxAI/blob/main/README.md#deployment-options) - Docker, Systemd, Termux
+- [Security Model](https://github.com/zakmijo2-dotcom/SyntaxAI/blob/main/README.md#security--safety) - Approval systems and protections
+
+## �� 📜 License
+
+Copyright © 2026 SyntaxAI Team
+
+Licensed under the [MIT License](https://github.com/zakmijo2-dotcom/SyntaxAI/blob/main/LICENSE) - see the [LICENSE](https://github.com/zakmijo2-dotcom/SyntaxAI/blob/main/LICENSE) file for details.
+
+## �� 🙏 Acknowledgments
+
+- Built with �� ❤��️ for developers who want AI assistance without compromising security or privacy
+- Inspired by the excellent [@earendil-works/pi](https://github.com/earendil-works/pi) coding agent
+- Powered by open-source LLMs: Google Gemini, DeepSeek, NVIDIA Nemotron
+- Made possible by the incredible open-source Python ecosystem
+
+---
+
+**SyntaxAI** - Code smarter, not harder.  
+Your terminal, upgraded with artificial intelligence.
