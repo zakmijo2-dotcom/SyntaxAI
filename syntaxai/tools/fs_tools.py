@@ -1,13 +1,88 @@
-"""File system tools for SyntaxAI."""
+"""File-system tools for SyntaxAI — hardened path validation."""
 
+from __future__ import annotations
+
+import fnmatch
+import logging
 import os
-import difflib
-import subprocess
 from pathlib import Path
 from dataclasses import dataclass
 from typing import Optional
 
+logger = logging.getLogger(__name__)
 
+# ── sensitive-file detection ───────────────────────────────────────────────────
+# Patterns matched against the *resolved absolute path* (not just the basename).
+_SENSITIVE_FILENAME_PATTERNS: tuple[str, ...] = (
+    ".env", ".env.*",
+    "*.key", "*.pem", "*.p12", "*.pfx", "*.crt", "*.cer", "*.cert",
+    "*.secret", "*.secrets",
+    "id_rsa", "id_dsa", "id_ecdsa", "id_ed25519",
+    "credentials", "credentials.*",
+    ".netrc", ".pgpass",
+)
+
+_SENSITIVE_DIR_PATTERNS: tuple[str, ...] = (
+    ".git", ".ssh", ".aws", ".gcloud", ".kube",
+)
+
+
+def is_sensitive_path(path: str) -> bool:
+    """Return *True* if *path* refers to a file that should not be
+    read/written without explicit permission.
+
+    Resolves symlinks before checking so that ``secret.env ->
+    .env`` is also caught.
+    """
+    try:
+        resolved = Path(path).resolve()
+    except OSError:
+        resolved = Path(path)
+
+    name = resolved.name
+
+    # Check filename patterns
+    for pat in _SENSITIVE_FILENAME_PATTERNS:
+        if fnmatch.fnmatch(name, pat):
+            return True
+        if fnmatch.fnmatch(name.lower(), pat.lower()):
+            return True
+
+    # Check every ancestor component (catches files inside .git/, .ssh/, …)
+    for part in resolved.parts:
+        for dir_pat in _SENSITIVE_DIR_PATTERNS:
+            if fnmatch.fnmatch(part, dir_pat):
+                return True
+
+    return False
+
+
+def _project_root() -> Optional[Path]:
+    """Walk up from cwd to find the nearest project root."""
+    markers = {
+        ".git", "pyproject.toml", "package.json",
+        "Cargo.toml", "go.mod", "pom.xml",
+    }
+    current = Path.cwd().resolve()
+    for candidate in [current, *current.parents]:
+        if any((candidate / m).exists() for m in markers):
+            return candidate
+    return None
+
+
+def _is_outside_project(path: Path) -> bool:
+    """Return *True* if *path* is outside the current project root."""
+    root = _project_root()
+    if root is None:
+        return False  # cannot determine root → allow
+    try:
+        path.relative_to(root)
+        return False
+    except ValueError:
+        return True
+
+
+# ── result types ──────────────────────────────────────────────────────────────
 @dataclass
 class ReadResult:
     success: bool
@@ -27,168 +102,146 @@ class EditResult:
     error: str = ""
 
 
-SENSITIVE_PATTERNS = [
-    ".env",
-    ".env.local",
-    ".env.*",
-    "*.key",
-    "*.pem",
-    "*.p12",
-    "*.crt",
-    "*.cert",
-    ".git/",
-    ".github/",
-    "*.secret",
-]
-
-
-def is_sensitive_path(path: str) -> bool:
-    path_obj = Path(path)
-    for pattern in SENSITIVE_PATTERNS:
-        if pattern.startswith("."):
-            if path_obj.name == pattern[1:] or path_obj.name.startswith(pattern[:-1]):
-                return True
-            if pattern.endswith("/*"):
-                if path_obj.parent.name == pattern[:-2]:
-                    return True
-        elif pattern.endswith("*"):
-            if path_obj.suffix == pattern[:-1]:
-                return True
-        else:
-            if pattern in path:
-                return True
-    return False
-
-
+# ── public API ─────────────────────────────────────────────────────────────────
 def read_file(path: str) -> ReadResult:
+    """Read *path* and return its contents."""
     try:
-        path_obj = Path(path).resolve()
-        
-        if is_sensitive_path(str(path_obj)):
-            return ReadResult(
-                success=False,
-                content="",
-                error=f"Access denied: '{path}' is a sensitive file. Reading requires explicit permission."
-            )
-        
-        if not path_obj.exists():
-            return ReadResult(success=False, content="", error=f"File not found: {path}")
-        
-        if path_obj.is_dir():
-            return ReadResult(success=False, content="", error=f"Path is a directory: {path}")
+        p = Path(path).resolve()
+    except OSError as exc:
+        return ReadResult(False, "", f"Invalid path: {exc}")
 
-        with open(path_obj, "r", encoding="utf-8", errors="replace") as f:
-            content = f.read()
-        
-        return ReadResult(success=True, content=content)
+    if is_sensitive_path(str(p)):
+        return ReadResult(
+            False, "",
+            f"Access denied: '{path}' is a sensitive file "
+            "(pass explicit permission to override).",
+        )
 
+    if not p.exists():
+        return ReadResult(False, "", f"File not found: {path}")
+    if p.is_dir():
+        return ReadResult(False, "", f"Path is a directory: {path}")
+
+    try:
+        content = p.read_text(encoding="utf-8", errors="replace")
+        return ReadResult(True, content)
     except PermissionError:
-        return ReadResult(success=False, content="", error=f"Permission denied: {path}")
-    except Exception as e:
-        return ReadResult(success=False, content="", error=str(e))
+        return ReadResult(False, "", f"Permission denied: {path}")
+    except Exception as exc:
+        return ReadResult(False, "", str(exc))
 
 
 def write_file(path: str, content: str) -> WriteResult:
+    """Write *content* to *path*, creating directories as needed."""
     try:
-        path_obj = Path(path).resolve()
-        
-        if is_sensitive_path(str(path_obj)):
-            return WriteResult(
-                success=False,
-                error=f"Access denied: '{path}' is a sensitive file. Writing requires explicit permission."
-            )
+        p = Path(path).resolve()
+    except OSError as exc:
+        return WriteResult(False, f"Invalid path: {exc}")
 
-        path_obj.parent.mkdir(parents=True, exist_ok=True)
-        
-        with open(path_obj, "w", encoding="utf-8") as f:
-            f.write(content)
-        
-        return WriteResult(success=True)
+    if is_sensitive_path(str(p)):
+        return WriteResult(
+            False,
+            f"Access denied: '{path}' is a sensitive file.",
+        )
 
+    if _is_outside_project(p):
+        return WriteResult(
+            False,
+            f"Writing outside the project root is not allowed: {p}",
+        )
+
+    try:
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(content, encoding="utf-8")
+        return WriteResult(True)
     except PermissionError:
-        return WriteResult(success=False, error=f"Permission denied: {path}")
-    except Exception as e:
-        return WriteResult(success=False, error=str(e))
+        return WriteResult(False, f"Permission denied: {path}")
+    except Exception as exc:
+        return WriteResult(False, str(exc))
 
 
 def edit_file(path: str, old: str, new: str) -> EditResult:
-    try:
-        result = read_file(path)
-        if not result.success:
-            return EditResult(success=False, error=result.error)
+    """Replace the first occurrence of *old* in *path* with *new*."""
+    result = read_file(path)
+    if not result.success:
+        return EditResult(False, result.error)
 
-        content = result.content
-        
-        if old not in content:
-            matches = list(difflib.ndiff(content.splitlines(keepends=True), old.splitlines(keepends=True)))
-            similar_lines = []
-            for i, (a, b) in enumerate(zip(content.splitlines(keepends=True), old.splitlines(keepends=True))):
-                if a != b:
-                    similar_lines.append((i+1, a.strip(), b.strip()))
-            
-            return EditResult(
-                success=False,
-                error=f"Pattern not found in file. Similar lines: {similar_lines[:3]}"
-            )
+    if old not in result.content:
+        # Provide a helpful diff hint
+        old_lines = old.splitlines()
+        file_lines = result.content.splitlines()
+        hint_lines: list[str] = []
+        for ol in old_lines[:3]:
+            close = [
+                fl for fl in file_lines
+                if ol.strip() and ol.strip() in fl
+            ]
+            if close:
+                hint_lines.append(close[0].strip())
+        hint = f" (similar lines: {hint_lines})" if hint_lines else ""
+        return EditResult(
+            False,
+            f"Pattern not found in '{path}'{hint}. "
+            "Check for whitespace differences or copy the exact text.",
+        )
 
-        new_content = content.replace(old, new, 1)
-        
-        return write_file(path, new_content)
-
-    except Exception as e:
-        return EditResult(success=False, error=str(e))
+    new_content = result.content.replace(old, new, 1)
+    wr = write_file(path, new_content)
+    return EditResult(wr.success, wr.error)
 
 
 def list_tree(path: str = ".", depth: int = 3) -> str:
+    """Return a textual directory tree rooted at *path*."""
+    depth = max(0, min(depth, 10))
     try:
-        path_obj = Path(path).resolve()
-        
-        if depth < 0:
-            depth = 0
-        if depth > 10:
-            depth = 10
+        root = Path(path).resolve()
+    except OSError as exc:
+        return f"Error: {exc}"
 
-        ignored_dirs = {".git", "__pycache__", ".pytest_cache", ".venv", "venv", "node_modules", ".idea", ".vscode"}
-        
-        lines = []
-        lines.append(f"{path}/\n")
-        
-        for root, dirs, files in os.walk(path_obj):
-            rel_root = Path(root).relative_to(path_obj) if Path(root) != path_obj else Path(".")
-            depth_level = len(rel_root.parts) if rel_root != Path(".") else 0
-            
-            if depth_level >= depth:
-                dirs[:] = []
-                continue
-            
-            dirs[:] = [d for d in dirs if d not in ignored_dirs and not d.startswith(".")]
-            
-            indent = "    " * depth_level
-            for d in sorted(dirs):
-                lines.append(f"{indent}├── {d}/")
-            
-            for f in sorted(files):
-                lines.append(f"{indent}├── {f}")
+    if not root.is_dir():
+        return f"Not a directory: {path}"
 
-        return "\n".join(lines)
+    _SKIP = frozenset({
+        ".git", "__pycache__", ".pytest_cache",
+        ".venv", "venv", "node_modules",
+        ".idea", ".vscode", "dist", "build", ".next",
+    })
 
-    except Exception as e:
-        return f"Error listing tree: {str(e)}"
+    lines: list[str] = [f"{root}/"]
+
+    def _walk(directory: Path, current_depth: int, prefix: str) -> None:
+        if current_depth >= depth:
+            return
+        entries = sorted(directory.iterdir(), key=lambda e: (e.is_file(), e.name))
+        visible = [e for e in entries if e.name not in _SKIP and not e.name.startswith(".")]
+        for i, entry in enumerate(visible):
+            is_last = i == len(visible) - 1
+            connector = "└── " if is_last else "├── "
+            lines.append(f"{prefix}{connector}{entry.name}{'/' if entry.is_dir() else ''}")
+            if entry.is_dir():
+                extension = "    " if is_last else "│   "
+                _walk(entry, current_depth + 1, prefix + extension)
+
+    _walk(root, 0, "")
+    return "\n".join(lines)
 
 
 def list_sensitive_files(path: str = ".") -> str:
+    """Return a list of detected sensitive files under *path*."""
     try:
-        path_obj = Path(path).resolve()
-        sensitive = []
-        
-        for pattern in SENSITIVE_PATTERNS:
-            for match in path_obj.glob(pattern):
-                sensitive.append(str(match))
-        
-        return "\n".join(sensitive) if sensitive else "No sensitive files found."
+        root = Path(path).resolve()
+    except OSError as exc:
+        return f"Error: {exc}"
 
-    except Exception as e:
-        return f"Error listing sensitive files: {str(e)}"
+    found: list[str] = []
+    for p in root.rglob("*"):
+        if p.is_file() and is_sensitive_path(str(p)):
+            try:
+                found.append(str(p.relative_to(root)))
+            except ValueError:
+                found.append(str(p))
+
+    return "\n".join(sorted(found)) if found else "No sensitive files found."
 
 
 def file_exists(path: str) -> bool:
@@ -198,5 +251,5 @@ def file_exists(path: str) -> bool:
 def get_file_size(path: str) -> Optional[int]:
     try:
         return Path(path).stat().st_size
-    except Exception:
+    except OSError:
         return None

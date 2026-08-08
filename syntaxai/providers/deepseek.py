@@ -1,115 +1,158 @@
-"""DeepSeek V4 Flash provider for SyntaxAI."""
+"""DeepSeek provider for SyntaxAI (OpenAI-compatible API)."""
+
+from __future__ import annotations
 
 import json
-from typing import Optional
+import logging
+from typing import Iterator
 
-from syntaxai.providers.base import LLMProvider, LLMResponse
+from syntaxai.providers.base import LLMProvider, LLMResponse, ToolSchema
+
+logger = logging.getLogger(__name__)
 
 try:
     import httpx
-    DEEPSEEK_AVAILABLE = True
+    _HTTPX_AVAILABLE = True
 except ImportError:
-    DEEPSEEK_AVAILABLE = False
+    _HTTPX_AVAILABLE = False
+
+_BASE_URL = "https://api.deepseek.com"
 
 
 class DeepSeekProvider(LLMProvider):
-    def __init__(self, api_key: str, model: str = "deepseek-chat", 
-                 base_url: str = ""):
-        super().__init__(api_key, model, base_url or "https://api.deepseek.com")
+    """DeepSeek provider using the OpenAI-compatible REST API."""
 
-    def generate(self, prompt: str, context: str = "", 
-                 tools: list[str] = None,
-                 tool_descriptions: dict = None) -> LLMResponse:
-        if not DEEPSEEK_AVAILABLE:
-            return self._fallback_response(prompt, context)
-        
+    def __init__(self, api_key: str, model: str = "deepseek-chat",
+                 base_url: str = "") -> None:
+        super().__init__(api_key, model, base_url or _BASE_URL)
+
+    def generate(
+        self,
+        messages: list[dict],
+        tool_schemas: list[ToolSchema] | None = None,
+    ) -> LLMResponse:
+        if not _HTTPX_AVAILABLE:
+            return self._unavailable_response("httpx")
+
+        body: dict = {
+            "model": self.model,
+            "messages": self._ensure_system(messages),
+            "max_tokens": self._max_tokens,
+            "temperature": 0.7,
+            "stream": False,
+        }
+
+        if tool_schemas:
+            body["tools"] = [s.to_openai_format() for s in tool_schemas]
+            body["tool_choice"] = "auto"
+
         try:
-            messages = self._build_messages(prompt, context, tools, tool_descriptions)
-            
-            payloads = {
-                "model": self.model,
-                "messages": messages,
-                "temperature": 0.7,
-                "max_tokens": self._max_tokens,
-                "top_p": 0.95,
-                "stream": False
-            }
-            
-            if tool_descriptions:
-                tool_schema = [{
-                    "type": "function",
-                    "function": {
-                        "name": name,
-                        "description": desc.split(":")[0] if ":" in desc else desc[:200],
-                        "parameters": {
-                            "type": "object",
-                            "properties": {}
-                        }
-                    }
-                } for name, desc in tool_descriptions.items()]
-                payloads["tools"] = tool_schema
-
-            headers = {
-                "Authorization": f"Bearer {self.api_key}",
-                "Content-Type": "application/json"
-            }
-
-            response = httpx.post(
+            r = httpx.post(
                 f"{self.base_url}/v1/chat/completions",
-                headers=headers,
-                json=payloads,
-                timeout=60.0
+                headers={"Authorization": f"Bearer {self.api_key}",
+                         "Content-Type": "application/json"},
+                json=body,
+                timeout=60.0,
             )
-
-            if response.status_code != 200:
-                return self._fallback_response(prompt, context, f"HTTP {response.status_code}")
-
-            data = response.json()
-            
-            tool_calls = []
-            if "choices" in data and len(data["choices"]) > 0:
-                choice = data["choices"][0]
-                if "message" in choice:
-                    message = choice["message"]
-                    if "tool_calls" in message and message["tool_calls"]:
-                        for tc in message["tool_calls"]:
-                            if "function" in tc:
-                                tool_calls.append({
-                                    "name": tc["function"]["name"],
-                                    "arguments": tc["function"].get("arguments", {})
-                                })
-                    if "content" in message:
-                        content = message["content"]
-                    else:
-                        content = ""
-                else:
-                    content = ""
-            else:
-                content = ""
-
-            usage = data.get("usage", {})
-            
+            r.raise_for_status()
+            return self._parse(r.json())
+        except Exception as exc:
+            logger.error("DeepSeek generate error: %s", exc)
             return LLMResponse(
-                content=content,
-                tool_calls=tool_calls,
-                usage=usage,
+                content=f"DeepSeek error: {exc}",
+                tool_calls=[],
+                usage={},
                 model=self.model,
-                finish_reason=data.get("choices", [{}])[0].get("finish_reason", "stop")
+                finish_reason="error",
             )
 
-        except Exception as e:
-            return self._fallback_response(prompt, context, str(e))
+    def stream(
+        self,
+        messages: list[dict],
+        tool_schemas: list[ToolSchema] | None = None,
+    ) -> Iterator[str]:
+        if not _HTTPX_AVAILABLE:
+            yield "httpx not installed."
+            return
 
-    def _fallback_response(self, prompt: str, context: str, error: str = "") -> LLMResponse:
+        body: dict = {
+            "model": self.model,
+            "messages": self._ensure_system(messages),
+            "max_tokens": self._max_tokens,
+            "temperature": 0.7,
+            "stream": True,
+        }
+
+        try:
+            with httpx.stream(
+                "POST",
+                f"{self.base_url}/v1/chat/completions",
+                headers={"Authorization": f"Bearer {self.api_key}",
+                         "Content-Type": "application/json"},
+                json=body,
+                timeout=120.0,
+            ) as resp:
+                resp.raise_for_status()
+                for line in resp.iter_lines():
+                    if not line.startswith("data: "):
+                        continue
+                    payload = line[6:].strip()
+                    if payload == "[DONE]":
+                        break
+                    try:
+                        chunk = json.loads(payload)
+                        delta = chunk["choices"][0].get("delta", {})
+                        text = delta.get("content") or ""
+                        if text:
+                            yield text
+                    except (json.JSONDecodeError, KeyError):
+                        pass
+        except Exception as exc:
+            logger.error("DeepSeek stream error: %s", exc)
+            yield f"[stream error: {exc}]"
+
+    # ── helpers ────────────────────────────────────────────────────────────────
+    @staticmethod
+    def _parse(data: dict) -> LLMResponse:
+        tool_calls: list[dict] = []
+        content = ""
+        finish = "stop"
+
+        try:
+            choice = data["choices"][0]
+            msg = choice.get("message", {})
+            content = msg.get("content") or ""
+            finish = choice.get("finish_reason", "stop")
+
+            for tc in msg.get("tool_calls") or []:
+                fn = tc.get("function", {})
+                raw_args = fn.get("arguments", "{}")
+                try:
+                    args = json.loads(raw_args) if isinstance(raw_args, str) else raw_args
+                except json.JSONDecodeError:
+                    args = {}
+                tool_calls.append({
+                    "id": tc.get("id", fn.get("name", "")),
+                    "name": fn.get("name", ""),
+                    "arguments": args,
+                })
+        except (KeyError, IndexError) as exc:
+            logger.warning("DeepSeek parse error: %s", exc)
+
         return LLMResponse(
-            content=f"Error connecting to DeepSeek API: {error}\n\nPrompt: {prompt[:100]}",
-            tool_calls=[],
-            usage={},
-            model=self.model,
-            finish_reason="error"
+            content=content,
+            tool_calls=tool_calls,
+            usage=data.get("usage", {}),
+            model=data.get("model", "deepseek"),
+            finish_reason=finish,
         )
 
-
-class DeepSeekV4FlashProvider(DeepSeekProvider):
-    def __init__(self, api_key: str):
-        super().__init__(api_key, model="deepseek-v4-flash", backend="https://api.deepseek.com")
+    @staticmethod
+    def _unavailable_response(dep: str) -> LLMResponse:
+        return LLMResponse(
+            content=f"{dep} not installed. Run: pip install {dep}",
+            tool_calls=[],
+            usage={},
+            model="deepseek",
+            finish_reason="error",
+        )

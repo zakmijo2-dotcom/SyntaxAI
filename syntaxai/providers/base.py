@@ -1,8 +1,35 @@
 """Base interface for LLM providers."""
 
+from __future__ import annotations
+
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
-from typing import Optional
+from dataclasses import dataclass, field
+from typing import Iterator, Optional
+
+
+@dataclass
+class ToolSchema:
+    """JSON-Schema-compliant description of a single tool."""
+    name: str
+    description: str
+    parameters: dict = field(default_factory=dict)
+
+    def to_openai_format(self) -> dict:
+        return {
+            "type": "function",
+            "function": {
+                "name": self.name,
+                "description": self.description,
+                "parameters": self.parameters,
+            },
+        }
+
+    def to_gemini_format(self) -> dict:
+        return {
+            "name": self.name,
+            "description": self.description,
+            "parameters": self.parameters,
+        }
 
 
 @dataclass
@@ -15,56 +42,44 @@ class LLMResponse:
 
 
 class LLMProvider(ABC):
-    def __init__(self, api_key: str, model: str, base_url: str = ""):
+    def __init__(self, api_key: str, model: str, base_url: str = "") -> None:
         self.api_key = api_key
         self.model = model
         self.base_url = base_url
-        self._max_tokens = 4000
+        self._max_tokens = 4096
 
     @abstractmethod
-    def generate(self, prompt: str, context: str = "", 
-                 tools: list[str] = None, 
-                 tool_descriptions: dict = None) -> LLMResponse:
-        pass
+    def generate(
+        self,
+        messages: list[dict],
+        tool_schemas: list[ToolSchema] | None = None,
+    ) -> LLMResponse:
+        """Send *messages* to the model and return a response.
 
-    def _build_messages(self, prompt: str, context: str, 
-                        tools: list[str] = None,
-                        tool_descriptions: dict = None) -> list[dict]:
-        messages = [
-            {
-                "role": "system",
-                "content": "You are SyntaxAI, a terminal programming assistant. "
-                          "Use tools when needed to interact with files, shell, or git."
-            },
-            {
-                "role": "user",
-                "content": f"{context}\n\n{prompt}" if context else prompt
-            }
-        ]
-        
-        if tools:
-            tool_str = "\n".join(
-                f"{t}: {desc}" for t, desc in tool_descriptions.items()
-            ) if tool_descriptions else ", ".join(tools)
-            messages[1]["content"] += f"\n\nAvailable tools:\n{tool_str}"
-        
-        return messages
+        Args:
+            messages: Full conversation history in OpenAI-style format.
+            tool_schemas: Optional list of tools the model may call.
+        """
 
+    def stream(
+        self,
+        messages: list[dict],
+        tool_schemas: list[ToolSchema] | None = None,
+    ) -> Iterator[str]:
+        """Stream response tokens. Default implementation yields all at once."""
+        response = self.generate(messages, tool_schemas)
+        if response.content:
+            yield response.content
 
-def get_provider_class(provider_name: str):
-    providers = {
-        "gemini": "syntaxai.providers.gemini.GeminiProvider",
-        "deepseek": "syntaxai.providers.deepseek.DeepSeekProvider",
-        "nemotron": "syntaxai.providers.nemotron.NemotronProvider",
-    }
-    
-    if provider_name.lower() in providers:
-        parts = providers[provider_name.lower()].split(".")
-        module_path = ".".join(parts[:-1])
-        class_name = parts[-1]
-        
-        import importlib
-        module = importlib.import_module(module_path)
-        return getattr(module, class_name)
-    
-    return None
+    def _system_prompt(self) -> str:
+        return (
+            "You are SyntaxAI, a terminal programming assistant. "
+            "Use the provided tools to read/write files, run shell commands, "
+            "and interact with git. Be concise, accurate, and safe."
+        )
+
+    def _ensure_system(self, messages: list[dict]) -> list[dict]:
+        """Prepend a system message if one is not already present."""
+        if messages and messages[0].get("role") == "system":
+            return messages
+        return [{"role": "system", "content": self._system_prompt()}] + messages
