@@ -1,30 +1,38 @@
-#!/data/data/com.termux/files/usr/bin/bash
-# SyntaxAI Install Script for Termux
+#!/usr/bin/env bash
+# SyntaxAI Install Script
 set -e
 
 echo "======================================"
-echo "  SyntaxAI Installer for Termux"
+echo "  SyntaxAI Installer"
 echo "======================================"
 
 detect_environment() {
     if [ -n "$TERMUX_VERSION" ]; then
         echo "Detected environment: Termux"
-        return 0
+        echo "termux"
     elif [ -n "$CODESPACE_NAME" ]; then
         echo "Detected environment: GitHub Codespaces"
-        return 1
+        echo "codespaces"
+    elif [ -n "$GITPOD_WORKSPACE_URL" ]; then
+        echo "Detected environment: Gitpod"
+        echo "gitpod"
     else
-        echo "Unknown environment, assumes non-Termux"
-        return 1
+        echo "Detected environment: Local"
+        echo "local"
     fi
 }
 
 install_termux_dependencies() {
     echo "Installing Termux dependencies..."
     
-    pkg update -y
-    pkg upgrade -y
-    pkg install -y python python-pip git
+    command -v pkg >/dev/null 2>&1 || {
+        echo "pkg not found, skipping Termux package installation"
+        return 0
+    }
+    
+    pkg update -y || true
+    pkg upgrade -y || true
+    pkg install -y python git || true
     
     echo "Termux dependencies installed."
 }
@@ -32,29 +40,25 @@ install_termux_dependencies() {
 install_python_deps() {
     echo "Installing Python dependencies..."
     
-    pip install --upgrade pip
-    pip install -r requirements.txt
+    pip install --upgrade pip --quiet 2>/dev/null || true
+    pip install -r requirements.txt --quiet 2>/dev/null || {
+        echo "Some packages may already be installed"
+    }
     
     echo "Python dependencies installed."
 }
 
 check_termux_features() {
-    echo "Checking Termux features..."
-    
-    if command -v termux-storage &> /dev/null; then
-        echo "Termux API available"
-    else
-        echo "Warning: Termux API not installed. Storage access may be limited."
-    fi
+    echo "Checking environment features..."
     
     if [ -d "/sdcard" ]; then
-        echo "SD Card accessible"
+        echo "SD Card/Storage accessible"
     else
-        echo "Warning: SD Card not accessible. Run: termux-setup-storage"
+        echo "Note: May need to run 'termux-setup-storage' for storage access"
     fi
 }
 
-setup_api_key_prompt() {
+setup_api_key_interactive() {
     echo ""
     echo "======================================"
     echo "  API Key Configuration"
@@ -66,27 +70,34 @@ setup_api_key_prompt() {
     echo "  1) Google Gemini"
     echo "  2) DeepSeek"
     echo "  3) Nemotron"
+    echo "  4) Skip (configure later)"
     echo ""
-    read -p "Enter choice (1-3): " choice
+    read -p "Enter choice (1-4): " choice
     
     case $choice in
         1)
-            read -p "Enter Gemini API Key: " api_key
-            export gemini_api_key="$api_key"
-            echo "gemini_api_key=$api_key" >> "$HOME/.syntaxai/.api_keys"
+            read -p "Enter Google Gemini API Key: " api_key
+            if [ -n "$api_key" ]; then
+                echo "gemini: $api_key" > "$HOME/.syntaxai/.api_keys"
+                echo "Google API key saved."
+            fi
             ;;
         2)
             read -p "Enter DeepSeek API Key: " api_key
-            export deepseek_api_key="$api_key"
-            echo "deepseek_api_key=$api_key" >> "$HOME/.syntaxai/.api_keys"
+            if [ -n "$api_key" ]; then
+                echo "deepseek: $api_key" > "$HOME/.syntaxai/.api_keys"
+                echo "DeepSeek API key saved."
+            fi
             ;;
         3)
             read -p "Enter Nemotron API Key: " api_key
-            export nemotron_api_key="$api_key"
-            echo "nemotron_api_key=$api_key" >> "$HOME/.syntaxai/.api_keys"
+            if [ -n "$api_key" ]; then
+                echo "nemotron: $api_key" > "$HOME/.syntaxai/.api_keys"
+                echo "Nemotron API key saved."
+            fi
             ;;
         *)
-            echo "Invalid choice. Skipping API key setup."
+            echo "Skipping API key setup. Configure later with: syntaxai --setup-api"
             ;;
     esac
     
@@ -121,34 +132,19 @@ providers:
 EOF
 }
 
-setup_alias() {
-    echo "Setting up alias..."
-    
-    if [ -f "$HOME/.bashrc" ]; then
-        if ! grep -q "alias syntaxai" "$HOME/.bashrc"; then
-            echo "" >> "$HOME/.bashrc"
-            echo "# SyntaxAI alias" >> "$HOME/.bashrc"
-            echo "alias syntaxai='python /data/data/com.termux/files/usr/bin/syntaxai'" >> "$HOME/.bashrc"
-        fi
-    fi
-    
-    echo "Alias added to .bashrc"
-}
-
 main() {
-    IS_TERMUX=$(detect_environment)
+    ENV_TYPE=$(detect_environment)
     
-    if [ "$IS_TERMUX" -eq 0 ]; then
+    if [ "$ENV_TYPE" = "termux" ]; then
         install_termux_dependencies
     else
-        echo "Non-Termux environment detected. Skipping Termux-specific setup."
+        echo "Non-Termux environment detected. Skipping Termux-specific package setup."
     fi
     
     install_python_deps
     check_termux_features
     create_config
-    setup_api_key_prompt
-    setup_alias
+    setup_api_key_interactive
     
     echo ""
     echo "======================================"
@@ -156,11 +152,12 @@ main() {
     echo "======================================"
     echo ""
     echo "To run SyntaxAI:"
-    echo "  syntaxai"
-    echo "  or"
-    echo "  python main.py"
+    echo "  python3 main.py"
+    echo "  or add to PATH and use: syntaxai"
     echo ""
-    echo "Configure your API key via environment variables or the setup prompt."
+    echo "Configure API keys via:"
+    echo "  syntaxai --setup-api"
+    echo "  or set GOOGLE_API_KEY, DEEPSEEK_API_KEY, NEMOTRON_API_KEY env vars"
     echo ""
 }
 
