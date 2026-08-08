@@ -1,0 +1,29 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+env/
+.venv/
+.env
+.idea/
+.vscode/
+*.egg-info/
+dist/
+build/
+
+# API Keys (user secrets)
+.syntaxai/.api_keys
+
+# Logs (optional - uncomment if you want to track logs)
+#.syntaxai/logs/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Python bytecode in project
+syntaxai/**/__pycache__/
+syntaxai/**/*.[pyc]
