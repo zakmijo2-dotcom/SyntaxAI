@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# SyntaxAI Install Script
+# SyntaxAI Install Script - Supports Termux, Codespaces, Gitpod, Local
 set -e
 
 echo "======================================"
@@ -32,7 +32,7 @@ install_termux_dependencies() {
     
     pkg update -y || true
     pkg upgrade -y || true
-    pkg install -y python git || true
+    pkg install -y python python-pip git || true
     
     echo "Termux dependencies installed."
 }
@@ -40,10 +40,17 @@ install_termux_dependencies() {
 install_python_deps() {
     echo "Installing Python dependencies..."
     
+    # Upgrade pip
     pip install --upgrade pip --quiet 2>/dev/null || true
+    
+    # Install core dependencies
     pip install -r requirements.txt --quiet 2>/dev/null || {
         echo "Some packages may already be installed"
     }
+    
+    # Install web UI dependencies
+    echo "Installing web UI dependencies..."
+    pip install fastapi uvicorn jinja2 --quiet 2>/dev/null || true
     
     echo "Python dependencies installed."
 }
@@ -132,6 +139,41 @@ providers:
 EOF
 }
 
+create_web_launcher() {
+    echo "Creating web UI launcher..."
+    
+    cat > "$HOME/.syntaxai/start_web.sh" << 'EOF'
+#!/usr/bin/env bash
+# SyntaxAI Web UI Launcher
+
+cd "$(dirname "$0")/../.."  # Navigate to project root
+
+# Check if we're in a Termux environment
+if [ -n "$TERMUX_VERSION" ]; then
+    # Termux: start server in background
+    echo "Starting SyntaxAI Web Server on http://127.0.0.1:8080"
+    python3 -m syntaxai.web.server &
+    SERVER_PID=$!
+    
+    # Open in browser (Termux-specific)
+    if command -v termux-open-url >/dev/null 2>&1; then
+        sleep 2
+        termux-open-url "http://127.0.0.1:8080"
+    fi
+    
+    echo "Server PID: $SERVER_PID"
+    echo "Press Ctrl+C to stop"
+    wait $SERVER_PID
+else
+    # Other environments: start server
+    echo "Starting SyntaxAI Web Server on http://127.0.0.1:8080"
+    python3 -m syntaxai.web.server
+fi
+EOF
+    
+    chmod +x "$HOME/.syntaxai/start_web.sh"
+}
+
 main() {
     ENV_TYPE=$(detect_environment)
     
@@ -144,6 +186,7 @@ main() {
     install_python_deps
     check_termux_features
     create_config
+    create_web_launcher
     setup_api_key_interactive
     
     echo ""
@@ -151,9 +194,13 @@ main() {
     echo "  Installation Complete!"
     echo "======================================"
     echo ""
-    echo "To run SyntaxAI:"
+    echo "To run SyntaxAI CLI:"
     echo "  python3 main.py"
-    echo "  or add to PATH and use: syntaxai"
+    echo "  or: syntaxai (after adding to PATH)"
+    echo ""
+    echo "To run SyntaxAI Web UI:"
+    echo "  bash ~/.syntaxai/start_web.sh"
+    echo "  Then open: http://127.0.0.1:8080"
     echo ""
     echo "Configure API keys via:"
     echo "  syntaxai --setup-api"

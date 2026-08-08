@@ -21,13 +21,15 @@ def check_environment() -> str:
         return "termux"
     if os.environ.get("CODESPACE_NAME"):
         return "codespaces"
-    if os.environ.get("GITpod_WORKspaces_URL"):
+    if os.environ.get("GITPOD_WORKSPACE_URL"):
         return "gitpod"
     return "local"
 
 
-def check_dependencies() -> bool:
+def check_dependencies(web: bool = False) -> bool:
     required = ["yaml", "httpx"]
+    if web:
+        required.extend(["fastapi", "uvicorn", "jinja2"])
     missing = []
     
     for dep in required:
@@ -39,6 +41,8 @@ def check_dependencies() -> bool:
     if missing:
         print(f"Missing dependencies: {', '.join(missing)}")
         print("Run: pip install -r requirements.txt")
+        if web:
+            print("For web UI: pip install fastapi uvicorn jinja2")
         return False
     
     return True
@@ -172,6 +176,26 @@ def check_python_version() -> bool:
     return True
 
 
+def run_web_server(host: str = "127.0.0.1", port: int = 8080) -> int:
+    """Run the web server for WebView UI."""
+    try:
+        from syntaxai.web.server import run_server
+        print(f"Starting SyntaxAI Web Server on http://{host}:{port}")
+        print("Press Ctrl+C to stop")
+        run_server(host, port)
+        return 0
+    except ImportError as e:
+        print(f"Web UI dependencies not installed: {e}")
+        print("Run: pip install fastapi uvicorn jinja2")
+        return 1
+    except KeyboardInterrupt:
+        print("\nServer stopped")
+        return 0
+    except Exception as e:
+        print(f"Server error: {e}")
+        return 1
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(
         prog="syntaxai",
@@ -179,10 +203,11 @@ def main() -> int:
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  syntaxai                    Start interactive session
-  syntaxai -p gemini          Use Gemini provider
+  syntaxai                    Start interactive CLI session
+  syntaxai --web              Start Web UI server
+  syntaxai -p gemini          Use Gemini provider (CLI)
   syntaxai --setup-api        Configure API key interactively
-  syntaxai hello world        One-shot query
+  syntaxai hello world        One-shot CLI query
 """
     )
     parser.add_argument("--provider", "-p", choices=["gemini", "deepseek", "nemotron"],
@@ -194,6 +219,10 @@ Examples:
     parser.add_argument("--config", "-c", help="Custom config path")
     parser.add_argument("--setup-api", action="store_true", 
                         help="Setup API key interactively")
+    parser.add_argument("--web", action="store_true",
+                        help="Start Web UI server (WebView)")
+    parser.add_argument("--host", default="127.0.0.1", help="Web server host")
+    parser.add_argument("--port", type=int, default=8080, help="Web server port")
     parser.add_argument("query", nargs="*", help="Query to execute (optional)")
     
     args = parser.parse_args()
@@ -207,6 +236,12 @@ Examples:
         return 1
     
     env_type = check_environment()
+    
+    # Web server mode
+    if args.web:
+        if not check_dependencies(web=True):
+            return 1
+        return run_web_server(args.host, args.port)
     
     if not check_dependencies():
         return 1
