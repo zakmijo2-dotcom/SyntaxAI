@@ -9,6 +9,8 @@ from pathlib import Path
 from dataclasses import dataclass
 from typing import Optional
 
+from syntaxai.tools.output import read_text_truncated, truncate_output
+
 logger = logging.getLogger(__name__)
 
 # ── sensitive-file detection ───────────────────────────────────────────────────
@@ -123,7 +125,7 @@ def read_file(path: str) -> ReadResult:
         return ReadResult(False, "", f"Path is a directory: {path}")
 
     try:
-        content = p.read_text(encoding="utf-8", errors="replace")
+        content = read_text_truncated(p, encoding="utf-8")
         return ReadResult(True, content)
     except PermissionError:
         return ReadResult(False, "", f"Permission denied: {path}")
@@ -223,7 +225,9 @@ def list_tree(path: str = ".", depth: int = 3) -> str:
                 _walk(entry, current_depth + 1, prefix + extension)
 
     _walk(root, 0, "")
-    return "\n".join(lines)
+    tree = "\n".join(lines)
+    # Protect the context from huge trees (e.g. node_modules that slipped through).
+    return truncate_output(tree, 20000)
 
 
 def list_sensitive_files(path: str = ".") -> str:

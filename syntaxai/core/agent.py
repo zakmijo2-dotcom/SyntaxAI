@@ -3,10 +3,12 @@ Core agent loop for SyntaxAI.
 
 Supports:
 - Multi-tool execution per LLM response
-- Iterative loop with configurable max_steps
-- Per-tool retry with exponential back-off
+- Iterative loop with configurable ``max_steps`` (mobile-aware)
+- Per-tool retry with **exponential backoff** (mobile-aware retry count)
 - Automatic re-planning after tool failures
 - Provider fallback when the primary provider is unavailable
+- Optional streaming events (thinking / tool_start / tool_end / partial / response)
+- Lazy skill loading (only matching skills' full text is sent to the LLM)
 """
 
 from __future__ import annotations
@@ -14,6 +16,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import random
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -28,16 +31,18 @@ from syntaxai.providers.nemotron import NemotronProvider
 from syntaxai.tools.fs_tools import read_file, write_file, edit_file, list_tree
 from syntaxai.tools.shell_tools import execute_command
 from syntaxai.tools.git_tools import git_status, git_diff, git_commit, git_push
-from syntaxai.tools.skills_loader import extract_skills_from_project
+from syntaxai.tools.skills_loader import (
+    extract_skills_from_project,
+    find_matching_skills,
+    load_skill_full,
+)
 from syntaxai.safety.approval import get_approval, log_command
 from syntaxai.safety.risk_rules import classify_command, RiskLevel
 
 logger = logging.getLogger(__name__)
 
-# ── constants ─────────────────────────────────────────────────────────────────
-MAX_STEPS: int = 20          # hard stop for the agent loop
-MAX_TOOL_RETRIES: int = 2    # retries per failed tool call
-RETRY_DELAY: float = 0.5     # seconds between retries
+# Backoff base (seconds). Actual delay = base * 2^(attempt-1) + jitter.
+RETRY_BASE_DELAY: float = 0.5
 
 
 # ── result types ──────────────────────────────────────────────────────────────
@@ -166,15 +171,15 @@ class Agent:
         self.config = config or Config.load()
         self.context = ContextManager(self.config)
         self._tool_handlers: dict[str, Callable[[dict], ToolResult]] = {
-            "read_file":  self._handle_read_file,
+            "read_file": self._handle_read_file,
             "write_file": self._handle_write_file,
-            "edit_file":  self._handle_edit_file,
-            "list_tree":  self._handle_list_tree,
-            "shell":      self._handle_shell,
+            "edit_file": self._handle_edit_file,
+            "list_tree": self._handle_list_tree,
+            "shell": self._handle_shell,
             "git_status": self._handle_git_status,
-            "git_diff":   self._handle_git_diff,
+            "git_diff": self._handle_git_diff,
             "git_commit": self._handle_git_commit,
-            "git_push":   self._handle_git_push,
+            "git_push": self._handle_git_push,
         }
         self._provider_cache: dict[tuple, LLMProvider] = {}
         self._provider_order: list[ProviderType] = self._build_provider_order()
@@ -182,34 +187,33 @@ class Agent:
 
     # ── context & setup ────────────────────────────────────────────────────────
     def _init_system_context(self) -> None:
-        self.context.add_message(
-            "system",
+        text = (
             "You are SyntaxAI, a terminal-based programming assistant.\n"
             "You have access to tools for reading/writing files, running shell commands, "
             "and interacting with git. Use them as needed.\n"
             "Always explain what you are doing and why before calling a tool.\n"
             "If a tool fails, analyse the error and try a different approach.\n"
-            "Never execute destructive commands without explicit user confirmation.",
+            "Never execute destructive commands without explicit user confirmation."
         )
+        env_note = self.context.env_note()
+        if env_note:
+            text += "\n\n" + env_note
+        self.context.add_message("system", text)
 
     def _build_provider_order(self) -> list[ProviderType]:
-        """Return providers sorted so the configured default comes first."""
         all_providers = list(ProviderType)
         default = self.config.default_provider
         return [default] + [p for p in all_providers if p != default]
 
     # ── provider management ────────────────────────────────────────────────────
     def _get_provider(self, complexity: str = "light") -> Optional[LLMProvider]:
-        """Return a working provider, trying fallbacks if the primary fails."""
         for pt in self._provider_order:
             provider = self._init_provider(pt, complexity)
             if provider is not None:
                 return provider
         return None
 
-    def _init_provider(
-        self, pt: ProviderType, complexity: str
-    ) -> Optional[LLMProvider]:
+    def _init_provider(self, pt: ProviderType, complexity: str) -> Optional[LLMProvider]:
         cache_key = (pt, complexity)
         if cache_key in self._provider_cache:
             return self._provider_cache[cache_key]
@@ -218,29 +222,35 @@ class Agent:
         if not api_key:
             return None
 
+        connect_timeout = self.config.connect_timeout
+        read_timeout = self.config.read_timeout
+
         try:
-            provider: LLMProvider
             if pt == ProviderType.GEMINI:
                 model = (
-                    self.config.heavy_model
-                    if complexity == "heavy"
+                    self.config.heavy_model if complexity == "heavy"
                     else self.config.light_model
                 )
-                provider = GeminiProvider(api_key=api_key, model=model)
-            elif pt == ProviderType.DEEPSEEK:
-                model = (
-                    "deepseek-chat"
-                    if complexity == "light"
-                    else "deepseek-reasoner"
+                provider = GeminiProvider(
+                    api_key=api_key, model=model,
+                    connect_timeout=connect_timeout, read_timeout=read_timeout,
                 )
-                provider = DeepSeekProvider(api_key=api_key, model=model)
+            elif pt == ProviderType.DEEPSEEK:
+                model = "deepseek-chat" if complexity == "light" else "deepseek-reasoner"
+                provider = DeepSeekProvider(
+                    api_key=api_key, model=model,
+                    connect_timeout=connect_timeout, read_timeout=read_timeout,
+                )
             elif pt == ProviderType.NEMOTRON:
                 model = (
                     "nvidia/nemotron-mini-4b-instruct"
                     if complexity == "light"
                     else "nvidia/llama-3.1-nemotron-70b-instruct"
                 )
-                provider = NemotronProvider(api_key=api_key, model=model)
+                provider = NemotronProvider(
+                    api_key=api_key, model=model,
+                    connect_timeout=connect_timeout, read_timeout=read_timeout,
+                )
             else:
                 return None
 
@@ -251,45 +261,62 @@ class Agent:
             return None
 
     # ── main run loop ──────────────────────────────────────────────────────────
-    def run(self, user_input: str, *, max_steps: int = MAX_STEPS) -> str:
-        """
-        Run the agent loop for *user_input*.
+    def run(
+        self,
+        user_input: str,
+        *,
+        max_steps: Optional[int] = None,
+        event_sink: Optional[Callable[[dict], None]] = None,
+    ) -> str:
+        """Run the agent loop for *user_input*.
 
-        Returns the final assistant reply as a plain string.
-        The loop terminates when:
-          - the LLM returns a response with no tool calls (done), or
-          - max_steps is reached.
+        *event_sink* (optional) receives streaming dicts:
+            {"type": "thinking"},
+            {"type": "tool_start", "tool": ..., "args": ...},
+            {"type": "tool_end", "tool": ..., "success": ..., "result": ...},
+            {"type": "partial", "delta": ...},
+            {"type": "response", "message": ...},
+            {"type": "error", "message": ...},
+            {"type": "done"}.
         """
-        # refresh project context
+        if max_steps is None:
+            max_steps = self.config.max_steps
+
         try:
             self.context.set_project_path(os.getcwd())
         except Exception:
             pass
 
-        # load skills
+        # Lazy skill loading: metadata only, full text for matching skills.
         for skill in extract_skills_from_project():
             if skill not in self.context.skills:
                 self.context.skills.append(skill)
+        for skill in find_matching_skills(user_input, self.context.skills):
+            load_skill_full(skill)
 
         self.context.add_message("user", user_input)
 
         complexity = "heavy" if self.context.needs_heavy_model(user_input) else "light"
         provider = self._get_provider(complexity)
         if provider is None:
-            return (
+            msg = (
                 "No LLM provider is available. "
                 "Run `syntaxai --setup-api` to configure an API key."
             )
+            if event_sink:
+                event_sink({"type": "error", "message": msg})
+                event_sink({"type": "done"})
+            return msg
 
         history = self.context.get_messages_for_provider()
-        last_error: str = ""
+        last_error = ""
+
+        if event_sink:
+            event_sink({"type": "thinking"})
 
         for step_num in range(1, max_steps + 1):
             try:
-                response = provider.generate(
-                    messages=history,
-                    tool_schemas=TOOL_SCHEMAS,
-                )
+                response = provider.generate(messages=history, tool_schemas=TOOL_SCHEMAS)
             except Exception as exc:
                 last_error = str(exc)
                 logger.error("LLM call failed at step %d: %s", step_num, exc)
@@ -299,45 +326,65 @@ class Agent:
             if not response.tool_calls:
                 answer = response.content or ""
                 self.context.add_message("assistant", answer)
+                if event_sink:
+                    # Stream the final answer token-by-token if the provider can.
+                    streamed = False
+                    if hasattr(provider, "stream"):
+                        try:
+                            chunks: list[str] = []
+                            for tok in provider.stream(
+                                messages=history, tool_schemas=TOOL_SCHEMAS
+                            ):
+                                chunks.append(tok)
+                                event_sink({"type": "partial", "delta": tok})
+                            answer = "".join(chunks)
+                            self.context.add_message("assistant", answer)
+                            streamed = True
+                        except Exception as exc:
+                            logger.debug("Streaming fell back to generate: %s", exc)
+                    event_sink({"type": "response", "message": answer})
+                    event_sink({"type": "done"})
                 return answer
 
             # ── execute every tool call the LLM requested ─────────────────────
             self.context.add_message(
-                "assistant",
-                response.content or "",
-                tool_calls=response.tool_calls,
+                "assistant", response.content or "", tool_calls=response.tool_calls
             )
-
-            tool_result_messages: list[dict] = []
-            any_failure = False
 
             for call in response.tool_calls:
                 name = call.get("name", "")
                 args = call.get("arguments", {})
                 call_id = call.get("id", name)
 
+                if event_sink:
+                    event_sink({"type": "tool_start", "tool": name, "args": args})
+
                 result = self._dispatch_tool(name, args, user_input)
 
-                if not result.success:
-                    any_failure = True
-
-                tool_result_messages.append({
-                    "tool_call_id": call_id,
-                    "role": "tool",
-                    "name": name,
-                    "content": result.output if result.success else f"ERROR: {result.error}",
-                })
+                if event_sink:
+                    event_sink({
+                        "type": "tool_end",
+                        "tool": name,
+                        "success": result.success,
+                        "result": result.output if result.success else result.error,
+                    })
 
                 self.context.add_message(
                     "tool",
                     result.output if result.success else f"ERROR: {result.error}",
-                    tool_results=[{"tool": name, "result": result.output, "error": result.error}],
+                    tool_results=[{
+                        "tool": name,
+                        "result": result.output,
+                        "error": result.error,
+                    }],
                 )
 
-            # append tool results to provider history
             history = self.context.get_messages_for_provider()
 
-            # if all tools failed, inject a re-planning hint
+            # Re-planning hint if any tool failed.
+            any_failure = any(
+                "ERROR:" in m.content for m in self.context.messages[-len(response.tool_calls):]
+            )
             if any_failure and step_num < max_steps:
                 history.append({
                     "role": "user",
@@ -347,7 +394,8 @@ class Agent:
                     ),
                 })
 
-        # loop exhausted without a final answer
+        if event_sink:
+            event_sink({"type": "done"})
         if last_error:
             return f"Agent stopped after error: {last_error}"
         return (
@@ -355,20 +403,19 @@ class Agent:
             "Try a more specific request."
         )
 
-    # ── tool dispatch & retry ──────────────────────────────────────────────────
-    def _dispatch_tool(
-        self, name: str, args: dict, original_prompt: str
-    ) -> ToolResult:
-        """Call the tool *name* with retry logic."""
+    # ── tool dispatch & retry (exponential backoff) ─────────────────────────────
+    def _dispatch_tool(self, name: str, args: dict, original_prompt: str) -> ToolResult:
         if name not in self._tool_handlers:
             return ToolResult(False, "", f"Unknown tool: {name!r}", name)
 
         handler = self._tool_handlers[name]
+        max_retries = self.config.max_retries
         last_result = ToolResult(False, "", "Not executed", name)
 
-        for attempt in range(MAX_TOOL_RETRIES + 1):
+        for attempt in range(max_retries + 1):
             if attempt > 0:
-                time.sleep(RETRY_DELAY * attempt)
+                delay = RETRY_BASE_DELAY * (2 ** (attempt - 1)) + random.uniform(0, 0.3)
+                time.sleep(delay)
                 logger.debug("Retrying tool %s (attempt %d)", name, attempt + 1)
 
             try:
@@ -389,7 +436,9 @@ class Agent:
         if not path:
             return ToolResult(False, "", "Missing required argument: path")
         r = read_file(path)
-        return ToolResult(r.success, r.content if r.success else "", r.error if not r.success else "")
+        return ToolResult(
+            r.success, r.content if r.success else "", r.error if not r.success else ""
+        )
 
     def _handle_write_file(self, args: dict) -> ToolResult:
         path = args.get("path", "")
@@ -443,7 +492,6 @@ class Agent:
 
     # ── REPL ───────────────────────────────────────────────────────────────────
     def run_repl(self) -> None:
-        """Interactive REPL with readline history and rich output."""
         self._setup_readline()
         self._print_banner()
 
@@ -461,7 +509,6 @@ class Agent:
                 continue
 
             cmd = raw.lower()
-
             if cmd in ("exit", "quit", "/quit"):
                 print("Goodbye!")
                 break
@@ -480,7 +527,6 @@ class Agent:
                 self._print_skills()
                 continue
 
-            # normal query
             print("\033[90m[thinking…]\033[0m", end="\r")
             try:
                 response = self.run(raw)
@@ -488,7 +534,7 @@ class Agent:
                 self._print_error(str(exc))
                 continue
 
-            print(" " * 20, end="\r")  # clear "thinking…"
+            print(" " * 20, end="\r")
             print(f"\n\033[0m{response}\033[0m\n")
 
     # ── REPL helpers ───────────────────────────────────────────────────────────
@@ -509,7 +555,7 @@ class Agent:
             readline.set_history_length(500)
             atexit.register(readline.write_history_file, history_file)
         except ImportError:
-            pass  # readline not available on Windows
+            pass
 
     @staticmethod
     def _print_banner() -> None:

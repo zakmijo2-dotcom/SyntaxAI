@@ -42,11 +42,29 @@ class LLMResponse:
 
 
 class LLMProvider(ABC):
-    def __init__(self, api_key: str, model: str, base_url: str = "") -> None:
+    def __init__(
+        self,
+        api_key: str,
+        model: str,
+        base_url: str = "",
+        connect_timeout: float = 10.0,
+        read_timeout: float = 60.0,
+    ) -> None:
         self.api_key = api_key
         self.model = model
         self.base_url = base_url
+        self.connect_timeout = connect_timeout
+        self.read_timeout = read_timeout
         self._max_tokens = 4096
+
+    def _timeout(self) -> Optional[object]:
+        """Return an ``httpx.Timeout`` for subclasses that use httpx."""
+        try:
+            import httpx
+
+            return httpx.Timeout(self.connect_timeout, read=self.read_timeout)
+        except ImportError:
+            return None
 
     @abstractmethod
     def generate(

@@ -10,6 +10,7 @@ from pathlib import Path
 
 from syntaxai.core.config import Config, ProviderType
 from syntaxai.core.agent import Agent
+from syntaxai.core.env import detect_environment
 from syntaxai.ui.terminal_ui import print_banner, TerminalUI
 
 CONFIG_DIR = Path.home() / ".syntaxai"
@@ -223,6 +224,9 @@ Examples:
                         help="Start Web UI server (WebView)")
     parser.add_argument("--host", default="127.0.0.1", help="Web server host")
     parser.add_argument("--port", type=int, default=8080, help="Web server port")
+    parser.add_argument("--mobile", action="store_true",
+                        help="Force mobile/Termux-optimised profile "
+                             "(smaller context, fewer steps/retries)")
     parser.add_argument("query", nargs="*", help="Query to execute (optional)")
     
     args = parser.parse_args()
@@ -259,7 +263,11 @@ Examples:
             return 1
 
     config = Config.load()
-    
+
+    if args.mobile:
+        config.mobile_mode = True
+        config.apply_mobile_profile()
+
     if args.provider:
         try:
             config.default_provider = ProviderType(args.provider)

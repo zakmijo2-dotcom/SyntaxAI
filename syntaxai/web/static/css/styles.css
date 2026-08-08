@@ -440,3 +440,73 @@ body {
   background: #f6f8fa;
   border-color: #d0d7de;
 }
+
+/* ===== Mobile / Touch optimisation (Termux) ===== */
+* {
+  /* Avoid 300ms double-tap zoom delay on touch devices */
+  touch-action: manipulation;
+}
+
+.editor-btn {
+  /* Larger, finger-friendly tap targets on touch screens */
+  min-width: 40px;
+  min-height: 40px;
+  -webkit-tap-highlight-color: transparent;
+  user-select: none;
+}
+
+@media (max-width: 480px) {
+  .header {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 6px;
+    padding: 8px 10px;
+  }
+
+  .header-info {
+    gap: 10px;
+    font-size: 11px;
+  }
+
+  .header-right {
+    flex-wrap: wrap;
+    width: 100%;
+    gap: 6px;
+  }
+
+  .messages-container {
+    padding: 10px;
+    gap: 10px;
+  }
+
+  .message {
+    max-width: 92%;
+  }
+
+  .editor-header {
+    padding: 6px 10px;
+    flex-wrap: wrap;
+  }
+
+  .editor-input-wrapper {
+    order: 3;
+    flex-basis: 100%;
+    margin: 6px 0 0;
+  }
+
+  .editor-btn {
+    min-width: 44px;
+    min-height: 44px;
+  }
+
+  .footer {
+    flex-wrap: wrap;
+    gap: 6px;
+    font-size: 9px;
+    padding: 6px 10px;
+  }
+
+  .footer-left, .footer-center, .footer-right {
+    gap: 8px;
+  }
+}

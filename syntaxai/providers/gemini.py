@@ -22,8 +22,10 @@ class GeminiProvider(LLMProvider):
     """Google Gemini LLM provider with native function-calling support."""
 
     def __init__(self, api_key: str, model: str = "gemini-1.5-flash",
-                 base_url: str = "") -> None:
-        super().__init__(api_key, model, base_url)
+                 base_url: str = "", connect_timeout: float = 10.0,
+                 read_timeout: float = 60.0) -> None:
+        super().__init__(api_key, model, base_url,
+                         connect_timeout=connect_timeout, read_timeout=read_timeout)
         if _GEMINI_AVAILABLE:
             genai.configure(api_key=api_key)
 
@@ -49,7 +51,10 @@ class GeminiProvider(LLMProvider):
             )
             gemini_history, last_user_msg = self._convert_messages(messages)
             chat = model.start_chat(history=gemini_history)
-            response = chat.send_message(last_user_msg)
+            response = chat.send_message(
+                last_user_msg,
+                request_options={"timeout": self.read_timeout},
+            )
             return self._parse_response(response)
         except Exception as exc:
             logger.error("Gemini generate error: %s", exc)
@@ -74,7 +79,10 @@ class GeminiProvider(LLMProvider):
             model = genai.GenerativeModel(model_name=self.model)
             gemini_history, last_user_msg = self._convert_messages(messages)
             chat = model.start_chat(history=gemini_history)
-            for chunk in chat.send_message(last_user_msg, stream=True):
+            for chunk in chat.send_message(
+                last_user_msg, stream=True,
+                request_options={"timeout": self.read_timeout},
+            ):
                 if chunk.text:
                     yield chunk.text
         except Exception as exc:

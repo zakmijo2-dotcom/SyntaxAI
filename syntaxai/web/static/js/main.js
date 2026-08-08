@@ -8,12 +8,14 @@ class SyntaxAIWebUI {
     // State
     this.ws = null;
     this.reconnectAttempts = 0;
-    this.maxReconnectAttempts = 5;
+    this.maxReconnectAttempts = 8;
     this.isConnected = false;
     this.sessionId = null;
     this.provider = 'gemini';
     this.model = null;
     this.thinkingLevel = 'medium';
+    this.requestId = 0;
+    this.maxRenderedMessages = 150; // virtualize DOM for low-memory devices
     
     // DOM Elements
     this.elements = {
@@ -91,7 +93,8 @@ class SyntaxAIWebUI {
   }
   
   connectWebSocket() {
-    this.ws = new WebSocket(`ws://${window.location.host}/ws`);
+    const proto = window.location.protocol === 'https:' ? 'wss' : 'ws';
+    this.ws = new WebSocket(`${proto}://${window.location.host}/ws`);
     
     this.ws.onopen = () => {
       this.isConnected = true;
@@ -126,7 +129,9 @@ class SyntaxAIWebUI {
   attemptReconnect() {
     if (this.reconnectAttempts < this.maxReconnectAttempts) {
       this.reconnectAttempts++;
-      setTimeout(() => this.connectWebSocket(), 1000 * this.reconnectAttempts);
+      // Exponential backoff with cap (mobile: avoid hammering the server).
+      const delay = Math.min(1000 * Math.pow(2, this.reconnectAttempts), 30000);
+      setTimeout(() => this.connectWebSocket(), delay);
     } else {
       this.updateStatus('Max Reconnect Attempts', 'var(--accent-warning)');
     }
@@ -273,6 +278,7 @@ class SyntaxAIWebUI {
     this.sendWebSocketMessage({
       type: 'query',
       query: message,
+      request_id: ++this.requestId,
       provider: this.provider,
       model: this.model,
       isSteering: true
@@ -290,6 +296,7 @@ class SyntaxAIWebUI {
     this.sendWebSocketMessage({
       type: 'query',
       query: message,
+      request_id: ++this.requestId,
       provider: this.provider,
       model: this.model,
       isFollowup: true
@@ -352,6 +359,12 @@ class SyntaxAIWebUI {
   }
   
   addMessageToContainer(type, content) {
+    // Virtualize the DOM on memory-constrained devices: drop the oldest message
+    // once we exceed the cap so the page never grows unbounded.
+    while (this.messagesContainer.children.length >= this.maxRenderedMessages) {
+      this.messagesContainer.removeChild(this.messagesContainer.firstChild);
+    }
+
     const messageDiv = document.createElement('div');
     messageDiv.className = `message ${type}`;
     messageDiv.innerHTML = `<div class="message-content">${content}</div>`;

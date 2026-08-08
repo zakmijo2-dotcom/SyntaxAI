@@ -22,17 +22,24 @@ from typing import Optional
 
 from syntaxai.safety.risk_rules import classify_command, RiskLevel
 from syntaxai.safety.approval import get_approval, log_command
+from syntaxai.tools.output import truncate_output
 
 logger = logging.getLogger(__name__)
 
-# Hard-blocked patterns — rejected unconditionally, no approval possible
-_HARD_BLOCKED: list[re.Pattern] = [
-    re.compile(r"rm\s+-rf\s+/[^a-zA-Z0-9]", re.IGNORECASE),  # rm -rf /
-    re.compile(r"rm\s+--no-preserve-root", re.IGNORECASE),
-    re.compile(r":\(\)\s*\{", re.IGNORECASE),          # fork bomb
-    re.compile(r"mkfs\.", re.IGNORECASE),               # filesystem creation
-    re.compile(r"dd\s+if=\s*/dev/", re.IGNORECASE),    # raw disk overwrite
-    re.compile(r">\s*/dev/(sd|hd|nvme)", re.IGNORECASE),
+# Hard-blocked patterns — rejected unconditionally, no approval possible.
+# These are catastrophic, irreversible operations that must never run, even
+# with explicit user approval.
+_HARD_BLOCKED: list[tuple[re.Pattern, str]] = [
+    (re.compile(r"\brm\s+-rf\s+/\s*$", re.IGNORECASE), "rm -rf / (filesystem root)"),
+    (re.compile(r"\brm\s+-rf\s+/\*\s*$", re.IGNORECASE), "rm -rf /* (filesystem root)"),
+    (re.compile(r"\brm\s+-rf\s+/[^a-zA-Z0-9]", re.IGNORECASE), "rm -rf /<root-path>"),
+    (re.compile(r"\brm\s+--no-preserve-root", re.IGNORECASE), "--no-preserve-root"),
+    (re.compile(r":\(\)\s*\{", re.IGNORECASE), "fork bomb"),
+    (re.compile(r"\bmkfs\b", re.IGNORECASE), "filesystem creation (mkfs)"),
+    (re.compile(r"\bdd\s+if=\s*/dev/", re.IGNORECASE), "raw disk overwrite via dd"),
+    (re.compile(r">\s*/dev/(sd|hd|nvme|vda)", re.IGNORECASE), "overwrite of a block device"),
+    (re.compile(r"\bshred\s+-[a-zA-Z]*[nuz]", re.IGNORECASE), "secure wipe (shred)"),
+    (re.compile(r"\bchmod\s+-R\s+000\b", re.IGNORECASE), "recursive chmod 000"),
 ]
 
 # Shell-feature indicators — requires shell=True
@@ -50,9 +57,9 @@ class CommandResult:
 
 
 def _is_hard_blocked(command: str) -> tuple[bool, str]:
-    for pat in _HARD_BLOCKED:
+    for pat, reason in _HARD_BLOCKED:
         if pat.search(command):
-            return True, f"Blocked: matches hard-blocked pattern '{pat.pattern}'"
+            return True, f"Blocked (hard deny): {reason}"
     return False, ""
 
 
@@ -140,8 +147,8 @@ def execute_command(
 
         return CommandResult(
             success=proc.returncode == 0,
-            stdout=proc.stdout,
-            stderr=proc.stderr,
+            stdout=truncate_output(proc.stdout),
+            stderr=truncate_output(proc.stderr),
             command=command,
             approved=approved,
             exit_code=proc.returncode,

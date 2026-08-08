@@ -6,6 +6,8 @@ from pathlib import Path
 from dataclasses import dataclass
 from typing import Optional
 
+from syntaxai.tools.output import truncate_output
+
 
 @dataclass
 class GitStatus:
@@ -63,7 +65,7 @@ def git_status() -> str:
         if untracked:
             status_lines.append(f"\nUntracked files:\n" + "\n".join(f"  {f}" for f in untracked[:10]))
         
-        return "\n".join(status_lines)
+        return truncate_output("\n".join(status_lines))
 
     except FileNotFoundError:
         return "Git not found. Please install git."
@@ -111,9 +113,9 @@ def git_commit(message: str) -> str:
             text=True,
             timeout=10
         )
-        
+
         files = [f for f in staged_result.stdout.strip().split("\n") if f]
-        
+
         if not files:
             return "No staged changes to commit"
 
@@ -123,7 +125,9 @@ def git_commit(message: str) -> str:
         if len(files) > 10:
             preview_lines.append(f"  ... and {len(files) - 10} more")
 
-        return "\n".join(preview_lines) + f"\n\nCommit message: {message}"
+        return truncate_output(
+            "\n".join(preview_lines) + f"\n\nCommit message: {message}"
+        )
 
     except Exception as e:
         return f"Git commit preview error: {str(e)}"
@@ -172,7 +176,7 @@ def git_push(remote: str = "origin", branch: str = None) -> str:
             for c in remote_commits[:3]:
                 info_lines.append(f"    {c}")
 
-        return "\n".join(info_lines)
+        return truncate_output("\n".join(info_lines))
 
     except Exception as e:
         return f"Git push preview error: {str(e)}"

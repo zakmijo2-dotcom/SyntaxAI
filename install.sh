@@ -38,19 +38,28 @@ install_termux_dependencies() {
 }
 
 install_python_deps() {
-    echo "Installing Python dependencies..."
+    local mode="${1:-full}"
+    echo "Installing Python dependencies (mode: $mode)..."
     
     # Upgrade pip
     pip install --upgrade pip --quiet 2>/dev/null || true
     
-    # Install core dependencies
+    # Core dependencies (always required)
     pip install -r requirements.txt --quiet 2>/dev/null || {
         echo "Some packages may already be installed"
     }
     
-    # Install web UI dependencies
-    echo "Installing web UI dependencies..."
-    pip install fastapi uvicorn jinja2 --quiet 2>/dev/null || true
+    if [ "$mode" = "web" ] || [ "$mode" = "full" ]; then
+        echo "Installing Web UI dependencies..."
+        pip install -r requirements-web.txt --quiet 2>/dev/null || \
+        pip install fastapi uvicorn jinja2 --quiet 2>/dev/null || true
+    fi
+    
+    if [ "$mode" = "full" ]; then
+        echo "Installing Gemini provider SDK..."
+        pip install -r requirements-gemini.txt --quiet 2>/dev/null || \
+        pip install google-generativeai --quiet 2>/dev/null || true
+    fi
     
     echo "Python dependencies installed."
 }
@@ -175,6 +184,15 @@ EOF
 }
 
 main() {
+    MODE="full"
+    case "$1" in
+        --cli)  MODE="cli" ;;
+        --web)  MODE="web" ;;
+        --full) MODE="full" ;;
+        "")     MODE="full" ;;
+        *)      MODE="full" ;;
+    esac
+
     ENV_TYPE=$(detect_environment)
     
     if [ "$ENV_TYPE" = "termux" ]; then
@@ -183,28 +201,37 @@ main() {
         echo "Non-Termux environment detected. Skipping Termux-specific package setup."
     fi
     
-    install_python_deps
+    install_python_deps "$MODE"
     check_termux_features
     create_config
-    create_web_launcher
+    if [ "$MODE" != "cli" ]; then
+        create_web_launcher
+    fi
     setup_api_key_interactive
     
     echo ""
     echo "======================================"
-    echo "  Installation Complete!"
+    echo "  Installation Complete! (mode: $MODE)"
     echo "======================================"
     echo ""
     echo "To run SyntaxAI CLI:"
     echo "  python3 main.py"
     echo "  or: syntaxai (after adding to PATH)"
     echo ""
-    echo "To run SyntaxAI Web UI:"
-    echo "  bash ~/.syntaxai/start_web.sh"
-    echo "  Then open: http://127.0.0.1:8080"
-    echo ""
+    if [ "$MODE" != "cli" ]; then
+        echo "To run SyntaxAI Web UI:"
+        echo "  bash ~/.syntaxai/start_web.sh"
+        echo "  Then open: http://127.0.0.1:8080"
+        echo ""
+    fi
     echo "Configure API keys via:"
     echo "  syntaxai --setup-api"
     echo "  or set GOOGLE_API_KEY, DEEPSEEK_API_KEY, NEMOTRON_API_KEY env vars"
+    echo ""
+    echo "Granular install:"
+    echo "  bash install.sh --cli   # minimal (CLI only)"
+    echo "  bash install.sh --web   # CLI + Web UI"
+    echo "  bash install.sh --full  # everything (default)"
     echo ""
 }
 

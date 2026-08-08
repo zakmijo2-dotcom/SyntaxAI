@@ -315,3 +315,62 @@ Licensed under the [MIT License](https://github.com/zakmijo2-dotcom/SyntaxAI/blo
 
 **SyntaxAI** - Code smarter, not harder.  
 Your terminal, upgraded with artificial intelligence.
+
+## 📱 Mobile / Termux Optimizations
+
+SyntaxAI is engineered to run well on **mid-to-low-end Android devices via Termux**. When running on Termux (or with `syntaxai --mobile`), a mobile profile is applied automatically:
+
+| Optimization | Desktop default | Mobile (Termux) |
+|--------------|-----------------|-----------------|
+| Max context tokens | 32,000 | 12,000 |
+| Tool output cap | 8,000 chars | 3,000 chars |
+| File read cap | 20,000 chars | 8,000 chars |
+| Max agent steps | 20 | 12 |
+| Max retries | 2 (exponential) | 1 |
+| Concurrent web tasks | 4 | 1 |
+
+Key techniques:
+- **Token-aware context trimming** — messages are dropped by estimated token budget, always keeping the system prompt and the latest user request.
+- **Output truncation** — file/shell/git outputs are capped (head+tail) before they reach the LLM, preventing multi-MB payloads from exhausting RAM/tokens.
+- **Lazy skill loading** — only skill *metadata* is scanned at startup; the full skill body is loaded only when a skill matches the request.
+- **Non-blocking Web UI** — agent runs in a worker thread; WebSockets stream `thinking → tool_start → tool_end → partial → response` events. A semaphore bounds concurrent runs.
+- **Provider resilience** — OpenAI-compatible providers reuse a single `httpx.Client` with timeouts and retry on transient network errors.
+- **Environment awareness** — the agent is told it runs in Termux (no `sudo`, `systemd`, or `Docker`), so it avoids unsupported commands.
+
+## 📊 Benchmark
+
+Run `python benchmark.py` to compare the optimisation impact. Example (200 KB file read):
+
+```
+Before (no truncation) payload : 168,000 chars
+After  (truncated)      payload :   8,068 chars
+Token/context saving            : 95.2%
+```
+
+## 🤖 Termux Execution Guide
+
+```bash
+# 1. Install Termux from F-Droid, then inside Termux:
+pkg update && pkg upgrade -y
+pkg install -y python python-pip git
+termux-setup-storage
+
+# 2. Clone and install (CLI only — minimal for phones)
+git clone https://github.com/zakmijo2-dotcom/SyntaxAI.git
+cd SyntaxAI
+bash install.sh --cli
+
+# 3. (Optional) Web UI
+bash install.sh --web
+
+# 4. Configure an API key (Gemini / DeepSeek / Nemotron)
+python main.py --setup-api
+
+# 5. Run (mobile profile auto-applies on Termux)
+python main.py
+# or force it explicitly:
+python main.py --mobile
+
+# Web UI (non-blocking, concurrency-limited):
+bash ~/.syntaxai/start_web.sh
+```

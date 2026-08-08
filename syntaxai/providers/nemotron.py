@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import json
 import logging
-from typing import Iterator
+import time
+from typing import Iterator, Optional
 
 from syntaxai.providers.base import LLMProvider, LLMResponse, ToolSchema
 
@@ -17,15 +18,56 @@ except ImportError:
     _HTTPX_AVAILABLE = False
 
 _BASE_URL = "https://integrate.api.nvidia.com"
+_MAX_RETRIES = 3
 
 
 class NemotronProvider(LLMProvider):
-    """NVIDIA Nemotron provider via the NVIDIA NIM OpenAI-compatible API."""
+    """NVIDIA Nemotron provider via the NVIDIA NIM OpenAI-compatible API.
+
+    Uses a single persistent ``httpx.Client`` for connection reuse and retries
+    transient network errors (important on flaky Android/mobile connections).
+    """
 
     def __init__(self, api_key: str,
                  model: str = "nvidia/nemotron-mini-4b-instruct",
-                 base_url: str = "") -> None:
-        super().__init__(api_key, model, base_url or _BASE_URL)
+                 base_url: str = "", connect_timeout: float = 10.0,
+                 read_timeout: float = 60.0) -> None:
+        super().__init__(api_key, model, base_url or _BASE_URL,
+                         connect_timeout=connect_timeout, read_timeout=read_timeout)
+        self._client: Optional["httpx.Client"] = None
+
+    def _get_client(self) -> "httpx.Client":
+        if self._client is None:
+            timeout = httpx.Timeout(self.connect_timeout, read=self.read_timeout)
+            self._client = httpx.Client(timeout=timeout, follow_redirects=True)
+        return self._client
+
+    def _post(self, body: dict) -> dict:
+        """POST with retry on transient connection/read errors."""
+        client = self._get_client()
+        last_exc: Optional[Exception] = None
+        for attempt in range(_MAX_RETRIES):
+            try:
+                r = client.post(
+                    f"{self.base_url}/v1/chat/completions",
+                    headers={
+                        "Authorization": f"Bearer {self.api_key}",
+                        "Content-Type": "application/json",
+                    },
+                    json=body,
+                )
+                r.raise_for_status()
+                return r.json()
+            except (httpx.ConnectError, httpx.ReadTimeout,
+                    httpx.ConnectTimeout, httpx.RemoteProtocolError) as exc:
+                last_exc = exc
+                logger.warning("Nemotron network retry %d/%d: %s",
+                               attempt + 1, _MAX_RETRIES, exc)
+                time.sleep(0.5 * (2 ** attempt))
+            except Exception as exc:
+                last_exc = exc
+                break
+        raise last_exc or RuntimeError("Nemotron request failed")
 
     def generate(
         self,
@@ -48,17 +90,7 @@ class NemotronProvider(LLMProvider):
             body["tool_choice"] = "auto"
 
         try:
-            r = httpx.post(
-                f"{self.base_url}/v1/chat/completions",
-                headers={
-                    "Authorization": f"Bearer {self.api_key}",
-                    "Content-Type": "application/json",
-                },
-                json=body,
-                timeout=60.0,
-            )
-            r.raise_for_status()
-            return self._parse(r.json())
+            return self._parse(self._post(body))
         except Exception as exc:
             logger.error("Nemotron generate error: %s", exc)
             return LLMResponse(
@@ -87,7 +119,8 @@ class NemotronProvider(LLMProvider):
         }
 
         try:
-            with httpx.stream(
+            timeout = httpx.Timeout(self.connect_timeout, read=self.read_timeout)
+            with self._get_client().stream(
                 "POST",
                 f"{self.base_url}/v1/chat/completions",
                 headers={
@@ -95,7 +128,7 @@ class NemotronProvider(LLMProvider):
                     "Content-Type": "application/json",
                 },
                 json=body,
-                timeout=120.0,
+                timeout=timeout,
             ) as resp:
                 resp.raise_for_status()
                 for line in resp.iter_lines():
