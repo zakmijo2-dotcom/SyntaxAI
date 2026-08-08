@@ -45,13 +45,15 @@ app.mount("/static", StaticFiles(directory=static_dir), name="static")
 
 # Templates
 templates_dir = Path(__file__).parent / "templates"
-templates = Jinja2Templates(directory=templates_dir)
+templates = Jinja2Templates(directory=str(templates_dir))
 
 
 class QueryRequest(BaseModel):
     query: str
     provider: Optional[str] = None
     model: Optional[str] = None
+    isSteering: bool = False
+    isFollowup: bool = False
 
 
 class QueryResponse(BaseModel):
@@ -60,9 +62,10 @@ class QueryResponse(BaseModel):
 
 
 @app.get("/", response_class=HTMLResponse)
-async def index(request: Request):
+async def index():
     """Serve the main WebView UI."""
-    return templates.TemplateResponse("index.html", {"request": request})
+    html_file = Path(__file__).parent / "templates" / "index.html"
+    return HTMLResponse(html_file.read_text(encoding="utf-8"))
 
 
 @app.post("/api/query", response_model=QueryResponse)
@@ -101,9 +104,16 @@ async def websocket_endpoint(websocket: WebSocket):
             query = data.get("query", "")
             provider = data.get("provider")
             model = data.get("model")
+            is_steering = data.get("isSteering", False)
+            is_followup = data.get("isFollowup", False)
+            message_type = data.get("type", "query")
             
             if not _agent:
                 await websocket.send_json({"type": "error", "message": "Agent not initialized"})
+                continue
+            
+            if message_type == "ping":
+                await websocket.send_json({"type": "pong"})
                 continue
             
             # Send thinking indicator
@@ -156,6 +166,93 @@ async def get_config():
         "providers": [{"name": p.name.value, "model": p.model, "enabled": p.enabled} 
                       for p in _agent.config.providers]
     }
+
+
+@app.get("/api/setup-api")
+async def setup_api_page():
+    """Serve API key setup page."""
+    return HTMLResponse("""
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <title>SyntaxAI - Setup API Key</title>
+        <meta charset="utf-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <style>
+            body { font-family: -apple-system, BlinkMacSystemFont, sans-serif; background: #0d1117; color: #c9d1d9; margin: 0; padding: 20px; }
+            .container { max-width: 500px; margin: 0 auto; }
+            h1 { color: #2ea043; }
+            input, select { width: 100%; padding: 12px; margin: 10px 0; background: #21262d; border: 1px solid #30363d; border-radius: 6px; color: #c9d1d9; }
+            button { background: #2ea043; color: #0d1117; border: none; padding: 12px 24px; border-radius: 6px; cursor: pointer; font-weight: 600; }
+            button:hover { background: #3cb043; }
+        </style>
+    </head>
+    <body>
+        <div class="container">
+            <h1>Setup API Key</h1>
+            <p>Configure your LLM API key to use SyntaxAI</p>
+            <select id="provider">
+                <option value="gemini">Google Gemini</option>
+                <option value="deepseek">DeepSeek</option>
+                <option value="nemotron">NVIDIA Nemotron</option>
+            </select>
+            <input type="password" id="api-key" placeholder="Enter your API key">
+            <button onclick="saveKey()">Save Key</button>
+            <div id="result" style="margin-top: 20px;"></div>
+        </div>
+        <script>
+            async function saveKey() {
+                const provider = document.getElementById('provider').value;
+                const key = document.getElementById('api-key').value;
+                if (!key) {
+                    document.getElementById('result').innerHTML = '<p style="color: #f85149;">Please enter an API key</p>';
+                    return;
+                }
+                try {
+                    const response = await fetch('/setup-api-key', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ provider: provider, api_key: key })
+                    });
+                    const result = await response.text();
+                    document.getElementById('result').innerHTML = `<p style="color: #2ea043;">${result}</p>`;
+                } catch (error) {
+                    document.getElementById('result').innerHTML = `<p style="color: #f85149;">Error: ${error.message}</p>`;
+                }
+            }
+        </script>
+    </body>
+    </html>
+    """)
+
+
+@app.post("/setup-api-key")
+async def setup_api_key(provider: str, api_key: str):
+    """Handle API key setup."""
+    # Save to file
+    config_dir = Path.home() / ".syntaxai"
+    config_dir.mkdir(parents=True, exist_ok=True)
+    api_keys_file = config_dir / ".api_keys"
+    
+    existing_keys = {}
+    if api_keys_file.exists():
+        try:
+            import yaml
+            with open(api_keys_file, "r") as f:
+                existing_keys = yaml.safe_load(f) or {}
+        except Exception:
+            existing_keys = {}
+    
+    existing_keys[provider] = api_key
+    
+    import yaml
+    with open(api_keys_file, "w") as f:
+        yaml.dump(existing_keys, f)
+    
+    # Set environment variable
+    os.environ[f"{provider.upper()}_API_KEY"] = api_key
+    
+    return f"{provider.capitalize()} API key saved successfully"
 
 
 def run_server(host: str = "127.0.0.1", port: int = 8080):
